@@ -1,0 +1,11 @@
+.DS_Store
+.env
+.env.local
+.venv/
+__pycache__/
+*.pyc
+client/.next/
+client/node_modules/
+client/out/
+server/data/
+
