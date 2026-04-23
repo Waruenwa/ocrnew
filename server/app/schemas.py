@@ -12,17 +12,91 @@ class JobStatus(str, Enum):
     failed = "failed"
 
 
+class ImportStatus(str, Enum):
+    uploaded = "uploaded"
+    cleaning = "cleaning"
+    ocr_queued = "ocr_queued"
+    ocr_running = "ocr_running"
+    ready_for_review = "ready_for_review"
+    ocr_failed = "ocr_failed"
+    # Legacy value kept for records created before the background OCR workflow.
+    review_ready = "review_ready"
+    checked = "checked"
+
+
 class TextSegment(BaseModel):
     id: str
     text: str
     page_number: int
     bbox: tuple[float, float, float, float]
+    bboxes: list[tuple[float, float, float, float]] | None = None
+    raw_text: str | None = None
+    corrected_text: str | None = None
+    source_line_index: int | None = None
+    source_row_index: int | None = None
 
 
 class PageResult(BaseModel):
     page_number: int
     markdown: str
     segments: list[TextSegment] = Field(default_factory=list)
+
+
+class ImportPageAsset(BaseModel):
+    page_number: int
+    original_preview_path: str
+    cleaned_preview_path: str
+    markdown: str | None = None
+    raw_markdown: str | None = None
+    corrected_markdown: str | None = None
+    original_markdown: str | None = None
+    cleaned_markdown: str | None = None
+    selected_markdown_source: str | None = None
+    selected_markdown_score: float | None = None
+    original_markdown_score: float | None = None
+    cleaned_markdown_score: float | None = None
+    correction_model: str | None = None
+    correction_error: str | None = None
+    correction_similarity: float | None = None
+    original_ocr_error: str | None = None
+    cleaned_ocr_error: str | None = None
+    diff_similarity: float | None = None
+    suspicious_reasons: list[str] = Field(default_factory=list)
+    segments: list[TextSegment] = Field(default_factory=list)
+
+
+class ImportRecord(BaseModel):
+    id: str
+    source_filename: str
+    document_category: str | None = None
+    source_path: str
+    cleaned_file_path: str
+    source_fingerprint: str
+    status: ImportStatus
+    total_pages: int = 1
+    created_at: str
+    updated_at: str
+    checked_at: str | None = None
+    checked_by: str | None = None
+    note: str | None = None
+    ocr_markdown: str | None = None
+    raw_ocr_markdown: str | None = None
+    corrected_ocr_markdown: str | None = None
+    original_ocr_markdown: str | None = None
+    cleaned_ocr_markdown: str | None = None
+    correction_model: str | None = None
+    ocr_error_message: str | None = None
+    ocr_completed_at: str | None = None
+    pages: list[ImportPageAsset] = Field(default_factory=list)
+
+
+class ImportCheckPayload(BaseModel):
+    checked_by: str | None = None
+    note: str | None = None
+
+
+class ImportPageSavePayload(BaseModel):
+    markdown: str = ""
 
 
 class JobRecord(BaseModel):
@@ -43,8 +117,10 @@ class JobRecord(BaseModel):
 
 
 class AppConfigResponse(BaseModel):
+    imports_source_dir: str
     ocr_ready: bool
     extraction_ready: bool
+    ocr_model: str
     max_upload_mb: int
     text_model: str
 

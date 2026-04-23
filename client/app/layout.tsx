@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Noto_Sans_Thai } from "next/font/google";
 
+import { Provider } from "../components/ui/provider";
 import "./globals.css";
 
 const displayFont = Noto_Sans_Thai({
@@ -26,9 +27,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="th">
-      <body className={`${displayFont.variable} ${monoFont.variable}`}>
-        {children}
+    <html lang="th" suppressHydrationWarning>
+      <body
+        suppressHydrationWarning
+        className={`${displayFont.variable} ${monoFont.variable}`}
+      >
+        <Provider>{children}</Provider>
       </body>
     </html>
   );

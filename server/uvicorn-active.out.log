@@ -1,0 +1,76 @@
+[imports] automatic startup scan from C:\Users\waruen.w\Desktop\ocrnew\server\data\storage\incoming
+[imports] re-queued 1 pending OCR record(s)
+[imports] scan started for C:\Users\waruen.w\Desktop\ocrnew\server\data\storage\incoming
+[imports] source folder does not exist: C:\Users\waruen.w\Desktop\คำพิพากษา
+[imports] scan completed: no files found in C:\Users\waruen.w\Desktop\ocrnew\server\data\storage\incoming
+[imports] automatic startup scan completed: 0 record(s)
+[imports] OCR start: source.pdf (5 page(s))
+[imports] OCR source.pdf: page 1/5 running
+[imports] OCR source.pdf: page 1/5 done (selected_source=cleaned, corrected=no, ocr_seconds=50.0, reviewed_lines=0, corrected_lines=0, blocks=28)
+[imports] OCR source.pdf: page 2/5 running
+[imports] OCR source.pdf: page 2/5 done (selected_source=cleaned, corrected=no, ocr_seconds=59.6, reviewed_lines=0, corrected_lines=0, blocks=19)
+[imports] OCR source.pdf: page 3/5 running
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+[imports] OCR source.pdf: page 3/5 done (selected_source=cleaned, corrected=no, ocr_seconds=58.0, reviewed_lines=0, corrected_lines=0, blocks=19)
+[imports] OCR source.pdf: page 4/5 running
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+[imports] OCR source.pdf: page 4/5 done (selected_source=cleaned, corrected=no, ocr_seconds=49.5, reviewed_lines=0, corrected_lines=0, blocks=16)
+[imports] OCR source.pdf: page 5/5 running
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63689 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62661 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/1/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59050 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/2/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59050 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/3/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59050 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/4/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59050 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/5/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57061 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65097 - "GET /api/imports HTTP/1.1" 200 OK
+[imports] OCR source.pdf: page 5/5 done (selected_source=cleaned, corrected=no, ocr_seconds=117.6, reviewed_lines=0, corrected_lines=0, blocks=8)
+[imports] OCR completed: source.pdf
+INFO:     127.0.0.1:65097 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62936 - "GET /api/imports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62936 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50091 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61162 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/1/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61162 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/4/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64479 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/4/cleaned HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57258 - "GET /api/imports/26b2633d88d748f6bdc790441ccc6503/pages/5/cleaned HTTP/1.1" 200 OK

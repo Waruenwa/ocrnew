@@ -377,6 +377,16 @@ button {
   background: rgba(220, 252, 231, 0.95);
 }
 
+.status-review_ready {
+  color: #9a3412;
+  background: rgba(255, 237, 213, 0.95);
+}
+
+.status-checked {
+  color: #166534;
+  background: rgba(220, 252, 231, 0.95);
+}
+
 .status-failed {
   color: #991b1b;
   background: rgba(254, 226, 226, 0.95);
@@ -480,13 +490,150 @@ button {
 }
 
 .tabRow {
-  grid-template-columns: auto auto 1fr;
+  grid-template-columns: auto auto auto 1fr;
   align-items: center;
 }
 
-.resultSurface {
+.tableWrap,
+.previewCompareGrid,
+.previewPane,
+.reviewForm,
+.reviewActionRow,
+.reviewAudit,
+.tablePrimaryCell,
+.queueSummaryRow,
+.fullWidthPanel,
+.debugMetaGrid,
+.diffSummaryGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.diffList {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-height: 0;
   overflow: auto;
-  min-height: 52vh;
+  gap: 12px;
+}
+
+.diffRow,
+.diffRowHeader,
+.diffColumns,
+.diffColumn,
+.diffSourceGrid,
+.diffSourcePanel {
+  display: grid;
+  gap: 12px;
+}
+
+.fullWidthPanel {
+  align-content: start;
+}
+
+.tableWrap {
+  overflow: auto;
+  border: 1px solid rgba(73, 59, 36, 0.08);
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.reviewTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.reviewTable th,
+.reviewTable td {
+  padding: 14px 16px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid rgba(73, 59, 36, 0.08);
+}
+
+.reviewTable td:last-child,
+.reviewTable th:last-child {
+  text-align: center;
+}
+
+.reviewTable th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-soft);
+  background: rgba(251, 248, 242, 0.98);
+}
+
+.reviewTable tbody tr.isSelected {
+  background: rgba(236, 253, 245, 0.78);
+}
+
+.reviewTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.tablePrimaryCell span {
+  color: var(--text-soft);
+  word-break: break-word;
+}
+
+.queueTableWrap {
+  min-height: 58vh;
+}
+
+.iconActionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  color: var(--accent-strong);
+  text-decoration: none;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.08);
+}
+
+.iconActionButton:hover {
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
+.queueSummaryRow {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.detailWorkspaceGrid {
+  align-items: start;
+}
+
+.detailPanel {
+  display: flex !important;
+  flex-direction: column;
+  position: sticky;
+  top: 18px;
+  height: calc(100vh - 36px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.detailPanel .previewStage {
+  flex-grow: 1;
+  min-height: 72vh;
+  max-height: none;
+  overflow: auto;
+}
+
+.resultSurface {
+  flex-grow: 1;
+  min-height: 72vh;
+  max-height: none;
+  overflow: auto;
 }
 
 .interactiveSurface,
@@ -499,6 +646,83 @@ button {
 .interactiveSurface {
   padding: 16px;
   align-content: start;
+}
+
+.debugMetaGrid,
+.diffSummaryGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.diffRow {
+  padding: 16px;
+  border: 1px solid rgba(73, 59, 36, 0.1);
+  border-radius: 18px;
+  background: #ffffff;
+}
+
+.diffRowHeader {
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  color: var(--text-soft);
+}
+
+.diffColumns,
+.diffSourceGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diffColumn,
+.diffSourcePanel {
+  padding: 14px;
+  border: 1px solid rgba(73, 59, 36, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.96);
+  align-content: start;
+}
+
+.diffColumn.isSelectedSource,
+.diffSourcePanel.isSelectedSource {
+  border-color: rgba(15, 118, 110, 0.26);
+  background: rgba(236, 253, 245, 0.8);
+}
+
+.diffColumnHeader {
+  font-weight: 700;
+  color: var(--text-soft);
+}
+
+.diffText {
+  min-height: 64px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diffStatusBadge {
+  min-width: 84px;
+}
+
+.diffStatus-changed {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: rgba(255, 247, 237, 0.98);
+}
+
+.diffStatus-missing {
+  border-color: rgba(185, 28, 28, 0.22);
+  background: rgba(254, 242, 242, 0.98);
+}
+
+.diffStatus-same {
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.plainList {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.plainList li + li {
+  margin-top: 8px;
 }
 
 .ocrPageHeader {
@@ -515,6 +739,166 @@ button {
   border-radius: 16px;
   font-weight: 600;
   line-height: 1.45;
+}
+
+.segmentCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.segmentButtonContent {
+  display: grid;
+  gap: 8px;
+}
+
+.segmentButtonHeading {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.76;
+}
+
+.segmentButtonPrimary {
+  display: block;
+  font-size: 1rem;
+  word-break: break-word;
+}
+
+.segmentButtonSupport {
+  display: grid;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(73, 59, 36, 0.08);
+  font-weight: 500;
+  color: var(--text-soft);
+}
+
+.segmentButtonSupportLabel {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.segmentButton.isActive .segmentButtonSupport {
+  border-top-color: rgba(255, 255, 255, 0.24);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.segmentEditButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  min-width: 54px;
+  padding: 0;
+  border: 1px solid rgba(73, 59, 36, 0.12);
+  border-radius: 18px;
+  color: var(--accent-strong);
+  background: rgba(255, 255, 255, 0.96);
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.segmentEditButton:hover {
+  transform: translateY(-1px);
+}
+
+.segmentEditButton.isActive,
+.segmentEditButton:hover {
+  color: #ffffff;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+}
+
+.segmentEditIcon {
+  width: 20px;
+  height: 20px;
+}
+
+.lineEditDrawerContent {
+  display: grid;
+  gap: 14px;
+}
+
+.drawerIntro,
+.drawerFootnote {
+  margin: 0;
+  color: var(--text-soft);
+  line-height: 1.6;
+}
+
+.lineReferenceCard {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 18px;
+  background: rgba(236, 253, 245, 0.6);
+}
+
+.lineReferenceCard.isMuted {
+  border-color: rgba(73, 59, 36, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.lineReferenceLabel {
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
+.lineReferenceCard strong {
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.lineEditorTextarea {
+  min-height: 180px;
+}
+
+.drawerActionRow {
+  display: grid;
+  gap: 12px;
+}
+
+.lineEditAntDrawer .ant-drawer-content-wrapper {
+  max-width: calc(100vw - 24px);
+}
+
+.lineEditAntDrawer .ant-drawer-header {
+  padding: 18px 22px;
+  border-bottom: 1px solid rgba(73, 59, 36, 0.08);
+  background: rgba(251, 248, 242, 0.98);
+}
+
+.lineEditAntDrawer .ant-drawer-title {
+  color: var(--text);
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.lineEditAntDrawer .ant-drawer-body {
+  padding: 18px 22px 22px;
+  background:
+    radial-gradient(circle at top right, rgba(15, 118, 110, 0.08), transparent 42%),
+    rgba(255, 252, 248, 0.98);
+}
+
+.lineEditAntDrawer .ant-drawer-close {
+  color: var(--text-soft);
+ }
+
+.lineEditAntDrawer .ant-drawer-close:hover {
+  color: var(--accent-strong);
 }
 
 .interactionHint {
@@ -578,11 +962,96 @@ button {
   min-height: 0;
 }
 
+.previewCompareGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.previewPane {
+  align-content: start;
+}
+
+.previewPaneHeader {
+  padding: 0 2px;
+  color: var(--text-soft);
+}
+
+.reviewPreviewStage {
+  min-height: 60vh;
+}
+
+.reviewForm {
+  padding: 18px;
+  border: 1px solid rgba(73, 59, 36, 0.08);
+  border-radius: 18px;
+  background: rgba(251, 248, 242, 0.92);
+}
+
+.editPanel {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  min-height: 0;
+  overflow: auto;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid rgba(73, 59, 36, 0.08);
+  border-radius: 18px;
+  background: rgba(251, 248, 242, 0.92);
+}
+
+.editTextarea {
+  flex-grow: 1;
+  min-height: 200px;
+}
+
+.editActionRow {
+  display: grid;
+  grid-template-columns: auto repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-items: center;
+}
+
+.reviewFormHeader h2 {
+  margin: 8px 0 0;
+}
+
+.textInput {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid rgba(73, 59, 36, 0.12);
+  border-radius: 16px;
+  color: var(--text);
+  background: #ffffff;
+}
+
+.reviewActionRow {
+  grid-template-columns: auto repeat(2, minmax(0, 1fr));
+  align-items: center;
+}
+
+.reviewAudit {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(73, 59, 36, 0.08);
+  background: #ffffff;
+}
+
+.reviewAudit span {
+  color: var(--text-soft);
+}
+
 @media (max-width: 1280px) {
   .hero,
   .topGrid,
   .workspaceGrid {
     grid-template-columns: 1fr;
+  }
+
+  .detailPanel {
+    position: static;
+    height: auto;
+    overflow: visible;
   }
 }
 
@@ -608,7 +1077,15 @@ button {
   .metaRow,
   .statusBannerRow,
   .tabRow,
-  .ocrPageHeader {
+  .debugMetaGrid,
+  .diffSummaryGrid,
+  .ocrPageHeader,
+  .previewCompareGrid,
+  .reviewActionRow,
+  .queueSummaryRow,
+  .diffColumns,
+  .diffSourceGrid,
+  .diffRowHeader {
     grid-template-columns: 1fr;
   }
 

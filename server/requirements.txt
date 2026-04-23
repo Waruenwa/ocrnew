@@ -2,6 +2,8 @@ fastapi==0.135.2
 numpy==2.4.3
 opencv-python==4.13.0.92
 openai==2.30.0
+pymupdf==1.26.5
+pymongo==4.13.2
 pypdf==6.9.2
 python-multipart==0.0.22
 typhoon-ocr==0.4.1
