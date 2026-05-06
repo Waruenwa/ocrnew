@@ -18,6 +18,10 @@ import {
   API_BASE_URL,
   type ImportPageAsset,
   type ImportRecord,
+  type ReviewData,
+  type ReviewField,
+  type ReviewFieldKey,
+  type ReviewKeywordHit,
   type TextSegment,
 } from '../../lib/review';
 
@@ -34,7 +38,8 @@ type HighlightTarget = {
   bbox: [number, number, number, number];
 };
 
-type ParsedFieldKey =
+type ParsedFieldKey = Extract<
+  ReviewFieldKey,
   | 'caseRedNo'
   | 'caseBlackNo'
   | 'courtName'
@@ -42,7 +47,8 @@ type ParsedFieldKey =
   | 'interestRate'
   | 'principalAmount'
   | 'filingDate'
-  | 'attorneyFee';
+  | 'attorneyFee'
+>;
 
 type ParsedClause = {
   caseRedNo: string | null;
@@ -165,8 +171,37 @@ const RESULT_FIELDS: ResultFieldConfig[] = [
   { key: 'caseBlackNo', label: 'คดีดำเลขที่' },
   { key: 'courtName', label: 'ศาล' },
 ];
+const PARSED_FIELD_KEYS: ParsedFieldKey[] = [
+  'caseRedNo',
+  'caseBlackNo',
+  'courtName',
+  'payAmount',
+  'interestRate',
+  'principalAmount',
+  'filingDate',
+  'attorneyFee',
+];
 
 const HIT_OVERRIDE_STORAGE_VERSION = 'v2';
+const JUDGMENT_SOURCE_FIELDS = new Set<ParsedFieldKey>([
+  'payAmount',
+  'interestRate',
+  'principalAmount',
+  'filingDate',
+  'attorneyFee',
+]);
+const HEADER_NAVIGATION_FIELDS = new Set<ParsedFieldKey>([
+  'caseRedNo',
+  'caseBlackNo',
+  'courtName',
+]);
+const FIRST_PAGE_FALLBACK_ANCHORS: Partial<
+  Record<ParsedFieldKey, [number, number, number, number]>
+> = {
+  caseBlackNo: [0.603, 0.13, 0.887, 0.145],
+  caseRedNo: [0.603, 0.17, 0.887, 0.186],
+  courtName: [0.459, 0.279, 0.59, 0.295],
+};
 
 const panelStyles = {
   borderWidth: '1px',
@@ -206,8 +241,16 @@ export default function ImportNewInspectPage() {
   const [editingHitValue, setEditingHitValue] = useState('');
   const [hitOverrides, setHitOverrides] = useState<Record<string, string>>({});
   const [loadedPreviewUrl, setLoadedPreviewUrl] = useState('');
+  const [detectedHeaderAnchors, setDetectedHeaderAnchors] = useState<
+    Partial<Record<ParsedFieldKey, HighlightTarget>>
+  >({});
   const previewScrollRef = useRef<HTMLDivElement | null>(null);
   const previewContentRef = useRef<HTMLDivElement | null>(null);
+  const resultPanelRef = useRef<HTMLDivElement | null>(null);
+  const fieldCardRefs = useRef<
+    Partial<Record<ParsedFieldKey, HTMLDivElement | null>>
+  >({});
+  const hitCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   useEffect(() => {
     if (!importId) {
@@ -343,6 +386,39 @@ export default function ImportNewInspectPage() {
   }, [previewUrl]);
 
   useEffect(() => {
+    if (!record) {
+      setDetectedHeaderAnchors({});
+      return;
+    }
+
+    const firstPage = record.pages.find((page) => page.page_number === 1);
+    if (!firstPage) {
+      setDetectedHeaderAnchors({});
+      return;
+    }
+
+    let cancelled = false;
+    const firstPagePreviewUrl = `${API_BASE_URL}/api/imports/${record.id}/pages/${firstPage.page_number}/cleaned`;
+    setDetectedHeaderAnchors({});
+
+    detectFirstPageHeaderAnchors(firstPagePreviewUrl, firstPage.page_number)
+      .then((anchors) => {
+        if (!cancelled) {
+          setDetectedHeaderAnchors(anchors);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDetectedHeaderAnchors({});
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [record]);
+
+  useEffect(() => {
     if (!activeHighlight || activeHighlight.pageNumber !== activePageNumber) {
       return;
     }
@@ -411,12 +487,159 @@ export default function ImportNewInspectPage() {
     return parsed[key];
   }
 
+  function scrollResultNodeIntoView(
+    node: HTMLElement | null,
+    behavior: ScrollBehavior = 'smooth',
+  ) {
+    const container = resultPanelRef.current;
+    if (!container || !node) {
+      return;
+    }
+
+    const containerRect = container.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    const targetTop =
+      container.scrollTop +
+      (nodeRect.top - containerRect.top) -
+      container.clientHeight / 2 +
+      nodeRect.height / 2;
+
+    container.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior,
+    });
+  }
+
+  function scrollToFieldCard(
+    key: ParsedFieldKey,
+    behavior: ScrollBehavior = 'smooth',
+  ) {
+    scrollResultNodeIntoView(fieldCardRefs.current[key] ?? null, behavior);
+  }
+
+  function scrollToHitCard(hitId: string, behavior: ScrollBehavior = 'smooth') {
+    scrollResultNodeIntoView(hitCardRefs.current[hitId] ?? null, behavior);
+  }
+
+  function getFirstPageFallbackAnchor(
+    key: ParsedFieldKey,
+  ): HighlightTarget | null {
+    const bbox = FIRST_PAGE_FALLBACK_ANCHORS[key];
+    const firstPage = record?.pages.find((page) => page.page_number === 1);
+    if (!bbox || !firstPage) {
+      return null;
+    }
+
+    return {
+      pageNumber: firstPage.page_number,
+      bbox,
+    };
+  }
+
+  function isReasonableHeaderAnchor(
+    key: ParsedFieldKey,
+    anchor: HighlightTarget,
+  ): boolean {
+    if (anchor.pageNumber !== 1) {
+      return true;
+    }
+
+    const [, top, , bottom] = anchor.bbox;
+    if (key === 'caseBlackNo') {
+      return top <= 0.18 && bottom <= 0.26;
+    }
+    if (key === 'caseRedNo') {
+      return top <= 0.26 && bottom <= 0.34;
+    }
+    if (key === 'courtName') {
+      return top >= 0.14 && top <= 0.46 && bottom <= 0.54;
+    }
+    return true;
+  }
+
+  function getDerivedHeaderAnchor(key: ParsedFieldKey): HighlightTarget | null {
+    const firstPage =
+      record?.pages.find((page) => page.page_number === 1) ?? null;
+    if (!firstPage) {
+      return null;
+    }
+
+    const fieldValue = getFieldValue(key);
+    const exactAnchor = findHeaderAnchorByFieldValue(
+      firstPage,
+      key,
+      fieldValue,
+    );
+    if (exactAnchor) {
+      return exactAnchor;
+    }
+
+    if (key === 'caseBlackNo' || key === 'caseRedNo') {
+      const caseInfo = findCaseHeaderInfo(firstPage);
+      return key === 'caseBlackNo' ? caseInfo.blackAnchor : caseInfo.redAnchor;
+    }
+
+    if (key === 'courtName') {
+      return findCourtInfo(firstPage)?.anchor ?? null;
+    }
+
+    return null;
+  }
+
+  function resolveFieldAnchor(key: ParsedFieldKey): HighlightTarget | null {
+    if (HEADER_NAVIGATION_FIELDS.has(key)) {
+      const directAnchor = parsed?.fieldAnchors[key];
+      if (directAnchor && isReasonableHeaderAnchor(key, directAnchor)) {
+        return directAnchor;
+      }
+
+      const detectedAnchor = detectedHeaderAnchors[key];
+      if (detectedAnchor && isReasonableHeaderAnchor(key, detectedAnchor)) {
+        return detectedAnchor;
+      }
+    }
+
+    const derivedHeaderAnchor = getDerivedHeaderAnchor(key);
+    if (
+      derivedHeaderAnchor &&
+      isReasonableHeaderAnchor(key, derivedHeaderAnchor)
+    ) {
+      return derivedHeaderAnchor;
+    }
+
+    const directAnchor = parsed?.fieldAnchors[key];
+    if (directAnchor && isReasonableHeaderAnchor(key, directAnchor)) {
+      return directAnchor;
+    }
+
+    if (JUDGMENT_SOURCE_FIELDS.has(key)) {
+      const primaryHit =
+        parsed?.keywordHits.find((hit) => Boolean(hit.bbox)) ?? null;
+      if (primaryHit?.bbox) {
+        return {
+          pageNumber: primaryHit.pageNumber,
+          bbox: primaryHit.bbox,
+        };
+      }
+    }
+
+    return getFirstPageFallbackAnchor(key);
+  }
+
+  function getFieldSourceHit(key: ParsedFieldKey): KeywordHit | null {
+    if (!JUDGMENT_SOURCE_FIELDS.has(key)) {
+      return null;
+    }
+
+    return parsed?.keywordHits.find((hit) => Boolean(hit.bbox)) ?? null;
+  }
+
   function activateField(key: ParsedFieldKey) {
     setActiveFieldKey(key);
     setActiveHitId(null);
     setEditingHitId(null);
     setEditingHitValue('');
-    const anchor = parsed?.fieldAnchors[key];
+    const anchor = resolveFieldAnchor(key);
     if (anchor) {
       setActiveHighlight(anchor);
       setActivePageNumber(anchor.pageNumber);
@@ -433,7 +656,13 @@ export default function ImportNewInspectPage() {
   }
 
   function startEditField(key: ParsedFieldKey) {
-    activateField(key);
+    if (HEADER_NAVIGATION_FIELDS.has(key)) {
+      activateField(key);
+    } else {
+      setActiveFieldKey(null);
+      setActiveHitId(null);
+      setActiveHighlight(null);
+    }
     setEditingFieldKey(key);
     setEditingFieldValue(getFieldValue(key) || '');
   }
@@ -507,6 +736,25 @@ export default function ImportNewInspectPage() {
     setEditingHitValue('');
   }
 
+  function handlePreviewHighlightClick() {
+    if (activeHitId) {
+      scrollToHitCard(activeHitId);
+      return;
+    }
+
+    if (!activeFieldKey) {
+      return;
+    }
+
+    const sourceHit = getFieldSourceHit(activeFieldKey);
+    if (sourceHit) {
+      scrollToHitCard(sourceHit.id);
+      return;
+    }
+
+    scrollToFieldCard(activeFieldKey);
+  }
+
   function scrollPreviewToHighlight(behavior: ScrollBehavior) {
     if (!activeHighlight || activeHighlight.pageNumber !== activePageNumber) {
       return;
@@ -560,6 +808,7 @@ export default function ImportNewInspectPage() {
           overflow={{ xl: 'auto' }}
           position={{ xl: 'sticky' }}
           top={{ xl: '12px' }}
+          ref={resultPanelRef}
         >
           <Flex align="start" justify="space-between">
             <Link href="/" style={{ textDecoration: 'none' }}>
@@ -621,14 +870,22 @@ export default function ImportNewInspectPage() {
                 {activeHighlight &&
                 activeHighlight.pageNumber === activePageNumber ? (
                   <Box
-                    pointerEvents="none"
+                    as="button"
+                    onClick={handlePreviewHighlightClick}
                     position="absolute"
                     zIndex={2}
-                    border="2px solid rgba(255, 255, 255, 0.96)"
-                    outline="3px solid rgba(231, 111, 45, 0.98)"
-                    outlineOffset="3px"
-                    borderRadius="14px"
-                    boxShadow="0 0 0 5px rgba(231, 111, 45, 0.15), 0 12px 22px rgba(231, 111, 45, 0.22)"
+                    border="0"
+                    outline="3px solid rgba(231, 111, 45, 0.95)"
+                    outlineOffset="0"
+                    borderRadius="16px"
+                    boxShadow="none"
+                    cursor="pointer"
+                    aria-label="Scroll to the matching result content"
+                    bg="transparent"
+                    _hover={{
+                      borderColor: 'rgba(194, 65, 12, 0.98)',
+                      outlineColor: 'rgba(194, 65, 12, 0.78)',
+                    }}
                     style={getHighlightStyle(activeHighlight.bbox)}
                   />
                 ) : null}
@@ -693,22 +950,36 @@ export default function ImportNewInspectPage() {
                   md: 'repeat(2, minmax(0, 1fr))',
                 }}
               >
-                {RESULT_FIELDS.map((field) => (
-                  <EditableResultCard
-                    key={field.key}
-                    active={activeFieldKey === field.key}
-                    editing={editingFieldKey === field.key}
-                    editingValue={editingFieldValue}
-                    interactive
-                    label={field.label}
-                    onActivate={() => activateField(field.key)}
-                    onCancelEdit={cancelEditField}
-                    onChangeEditingValue={setEditingFieldValue}
-                    onEdit={() => startEditField(field.key)}
-                    onSaveEdit={saveEditField}
-                    value={getFieldValue(field.key)}
-                  />
-                ))}
+                {RESULT_FIELDS.map((field) => {
+                  const isHeaderNavigationField = HEADER_NAVIGATION_FIELDS.has(
+                    field.key,
+                  );
+                  return (
+                    <EditableResultCard
+                      key={field.key}
+                      active={
+                        isHeaderNavigationField && activeFieldKey === field.key
+                      }
+                      containerRef={(node: HTMLDivElement | null) => {
+                        fieldCardRefs.current[field.key] = node;
+                      }}
+                      editing={editingFieldKey === field.key}
+                      editingValue={editingFieldValue}
+                      interactive={isHeaderNavigationField}
+                      label={field.label}
+                      onActivate={
+                        isHeaderNavigationField
+                          ? () => activateField(field.key)
+                          : undefined
+                      }
+                      onCancelEdit={cancelEditField}
+                      onChangeEditingValue={setEditingFieldValue}
+                      onEdit={() => startEditField(field.key)}
+                      onSaveEdit={saveEditField}
+                      value={getFieldValue(field.key)}
+                    />
+                  );
+                })}
               </Grid>
 
               <Box
@@ -733,6 +1004,9 @@ export default function ImportNewInspectPage() {
                     {parsed.keywordHits.map((hit) => (
                       <Box
                         key={hit.id}
+                        ref={(node: HTMLDivElement | null) => {
+                          hitCardRefs.current[hit.id] = node;
+                        }}
                         borderWidth="1px"
                         borderColor={
                           activeHitId === hit.id
@@ -907,6 +1181,7 @@ function PillButton({
 
 function EditableResultCard({
   active,
+  containerRef,
   editing,
   editingValue,
   interactive,
@@ -919,6 +1194,7 @@ function EditableResultCard({
   value,
 }: {
   active: boolean;
+  containerRef?: (node: HTMLDivElement | null) => void;
   editing: boolean;
   editingValue: string;
   interactive: boolean;
@@ -932,6 +1208,7 @@ function EditableResultCard({
 }) {
   return (
     <Box
+      ref={containerRef}
       borderWidth="1px"
       borderColor={
         active ? 'rgba(231, 111, 45, 0.85)' : 'rgba(73, 59, 36, 0.08)'
@@ -946,12 +1223,12 @@ function EditableResultCard({
         <Text color="#6a5a45" fontSize="0.84rem" fontWeight="700" mb={1}>
           {label}
         </Text>
-        {interactive && !editing ? (
+        {onEdit && !editing ? (
           <Box
             as="button"
             onClick={(event) => {
               event.stopPropagation();
-              onEdit?.();
+              onEdit();
             }}
             color="#115e59"
             borderWidth="1px"
@@ -1042,6 +1319,56 @@ function parseImportByKeyword(
   record: ImportRecord | null,
   keyword: string,
 ): ParsedClause | null {
+  const fallback = parseImportByKeywordHeuristic(record, keyword);
+  const reviewDataParsed = parseImportReviewData(record);
+  if (!reviewDataParsed) {
+    return finalizeParsedClause(record, fallback, keyword);
+  }
+  if (!fallback) {
+    return finalizeParsedClause(record, reviewDataParsed, keyword);
+  }
+
+  const merged: ParsedClause = {
+    ...fallback,
+    ...reviewDataParsed,
+    fieldAnchors: {
+      ...fallback.fieldAnchors,
+      ...reviewDataParsed.fieldAnchors,
+    },
+    keywordHits:
+      reviewDataParsed.keywordHits.length > 0
+        ? reviewDataParsed.keywordHits
+        : fallback.keywordHits,
+  };
+
+  for (const key of PARSED_FIELD_KEYS) {
+    if (!reviewDataParsed[key] && fallback[key]) {
+      merged[key] = fallback[key];
+    }
+  }
+
+  return finalizeParsedClause(record, merged, keyword);
+}
+
+function finalizeParsedClause(
+  record: ImportRecord | null,
+  parsed: ParsedClause | null,
+  keyword: string,
+): ParsedClause | null {
+  if (!parsed) {
+    return null;
+  }
+
+  return {
+    ...parsed,
+    keywordHits: enrichKeywordHits(record, parsed.keywordHits, keyword),
+  };
+}
+
+function parseImportByKeywordHeuristic(
+  record: ImportRecord | null,
+  keyword: string,
+): ParsedClause | null {
   if (!record) {
     return null;
   }
@@ -1051,23 +1378,25 @@ function parseImportByKeyword(
     firstPage ? getPageText(firstPage) : '',
   );
   const normalizedKeyword = normalizeText(keyword);
-  const normalizedCategory = (record.document_category || '').trim().toLowerCase();
+  const normalizedCategory = (record.document_category || '')
+    .trim()
+    .toLowerCase();
   const shouldCaptureJudgmentClause =
-    normalizedCategory === 'judgment' || normalizedKeyword === normalizeText(KEYWORD);
-  const keywordOptions: KeywordWindowOptions =
-    shouldCaptureJudgmentClause
-      ? {
-          maxChars: 4000,
-          maxBlocks: 24,
-          minHighlightRows: 3,
-          captureToPageEnd: true,
-        }
-      : {
-          maxChars: 420,
-          maxBlocks: 2,
-          minHighlightRows: 1,
-          captureToPageEnd: false,
-        };
+    normalizedCategory === 'judgment' ||
+    normalizedKeyword === normalizeText(KEYWORD);
+  const keywordOptions: KeywordWindowOptions = shouldCaptureJudgmentClause
+    ? {
+        maxChars: 4000,
+        maxBlocks: 24,
+        minHighlightRows: 3,
+        captureToPageEnd: true,
+      }
+    : {
+        maxChars: 420,
+        maxBlocks: 2,
+        minHighlightRows: 1,
+        captureToPageEnd: false,
+      };
   const keywordHits: KeywordHit[] = [];
 
   for (const page of record.pages) {
@@ -1164,6 +1493,470 @@ function parseImportByKeyword(
   };
 }
 
+function parseImportReviewData(
+  record: ImportRecord | null,
+): ParsedClause | null {
+  const reviewData = record?.review_data;
+  if (!reviewData) {
+    return null;
+  }
+
+  const normalizedKeywordHits = normalizeReviewKeywordHits(reviewData);
+  const parsed: ParsedClause = {
+    caseRedNo: null,
+    caseBlackNo: null,
+    courtName: null,
+    payAmount: null,
+    interestRate: null,
+    principalAmount: null,
+    filingDate: null,
+    attorneyFee: null,
+    fieldAnchors: {},
+    keywordHits: normalizedKeywordHits,
+  };
+
+  let hasContent = normalizedKeywordHits.length > 0;
+  for (const key of PARSED_FIELD_KEYS) {
+    const field = reviewData.fields?.[key];
+    if (!field) {
+      continue;
+    }
+
+    const normalizedValue =
+      typeof field.value === 'string' && field.value.trim()
+        ? field.value.trim()
+        : null;
+    if (normalizedValue) {
+      parsed[key] = normalizedValue;
+      hasContent = true;
+    }
+
+    const anchor = toHighlightTarget(field);
+    if (anchor) {
+      parsed.fieldAnchors[key] = anchor;
+      hasContent = true;
+    }
+  }
+
+  return hasContent ? parsed : null;
+}
+
+function normalizeReviewKeywordHits(reviewData: ReviewData): KeywordHit[] {
+  if (!Array.isArray(reviewData.keywordHits)) {
+    return [];
+  }
+
+  return reviewData.keywordHits
+    .map((hit, index) => normalizeReviewKeywordHit(hit, index))
+    .filter((hit): hit is KeywordHit => hit !== null);
+}
+
+function normalizeReviewKeywordHit(
+  hit: ReviewKeywordHit,
+  index: number,
+): KeywordHit | null {
+  if (!hit || typeof hit !== 'object') {
+    return null;
+  }
+
+  const pageNumber =
+    typeof hit.pageNumber === 'number' && Number.isFinite(hit.pageNumber)
+      ? hit.pageNumber
+      : null;
+  const text = typeof hit.text === 'string' ? hit.text.trim() : '';
+  if (!pageNumber || !text) {
+    return null;
+  }
+
+  const bbox = normalizeBbox(hit.bbox);
+  const displayText =
+    typeof hit.displayText === 'string' && hit.displayText.trim()
+      ? hit.displayText.trim()
+      : text;
+
+  return {
+    id:
+      typeof hit.id === 'string' && hit.id.trim()
+        ? hit.id
+        : `review-hit-${pageNumber}-${index + 1}`,
+    pageNumber,
+    text,
+    displayText,
+    bbox,
+  };
+}
+
+function enrichKeywordHits(
+  record: ImportRecord | null,
+  hits: KeywordHit[],
+  keyword: string,
+): KeywordHit[] {
+  if (!record || hits.length === 0) {
+    return hits;
+  }
+
+  return hits.map((hit) => enrichKeywordHit(record, hit, keyword));
+}
+
+function enrichKeywordHit(
+  record: ImportRecord,
+  hit: KeywordHit,
+  keyword: string,
+): KeywordHit {
+  const page =
+    record.pages.find((item) => item.page_number === hit.pageNumber) ?? null;
+  if (!page) {
+    return hit;
+  }
+
+  const shouldCaptureJudgmentClause =
+    (record.document_category || '').trim().toLowerCase() === 'judgment' ||
+    normalizeText(keyword) === normalizeText(KEYWORD);
+  const keywordOptions: KeywordWindowOptions = shouldCaptureJudgmentClause
+    ? {
+        maxChars: 4000,
+        maxBlocks: 24,
+        minHighlightRows: 3,
+        captureToPageEnd: true,
+      }
+    : {
+        maxChars: 420,
+        maxBlocks: 2,
+        minHighlightRows: 1,
+        captureToPageEnd: false,
+      };
+
+  const bbox =
+    hit.bbox ||
+    buildKeywordWindowBbox(
+      page,
+      hit.text,
+      findKeywordSeedSegment(page, keyword, hit.text),
+      keywordOptions,
+    );
+  if (!bbox) {
+    return hit;
+  }
+
+  const displayText =
+    hit.displayText?.trim() ||
+    extractDisplayTextFromBbox(page, bbox) ||
+    hit.text;
+
+  return {
+    ...hit,
+    bbox,
+    displayText,
+  };
+}
+
+function findKeywordSeedSegment(
+  page: ImportPageAsset,
+  keyword: string,
+  windowText: string,
+): TextSegment | null {
+  const compactKeyword = compactForCompare(normalizeText(keyword));
+  const compactWindow = compactForCompare(normalizeText(windowText));
+
+  return (
+    page.segments.find((segment) => {
+      const text = compactForCompare(
+        normalizeText(getSegmentSearchText(segment)),
+      );
+      return Boolean(text && compactKeyword && text.includes(compactKeyword));
+    }) ||
+    page.segments.find((segment) => {
+      const text = compactForCompare(
+        normalizeText(getSegmentSearchText(segment)),
+      );
+      return Boolean(
+        text &&
+        compactWindow &&
+        (compactWindow.includes(text) || text.includes(compactWindow)),
+      );
+    }) ||
+    null
+  );
+}
+
+function toHighlightTarget(
+  field: ReviewField | null | undefined,
+): HighlightTarget | null {
+  if (!field) {
+    return null;
+  }
+
+  const pageNumber =
+    typeof field.pageNumber === 'number' && Number.isFinite(field.pageNumber)
+      ? field.pageNumber
+      : null;
+  const bbox = normalizeBbox(field.bbox);
+  if (!pageNumber || !bbox) {
+    return null;
+  }
+
+  return {
+    pageNumber,
+    bbox,
+  };
+}
+
+function normalizeBbox(
+  bbox: [number, number, number, number] | null | undefined,
+): [number, number, number, number] | null {
+  if (!bbox || bbox.length !== 4) {
+    return null;
+  }
+
+  const normalized = bbox.map((value) =>
+    typeof value === 'number' && Number.isFinite(value) ? value : NaN,
+  ) as [number, number, number, number];
+  if (normalized.some((value) => Number.isNaN(value))) {
+    return null;
+  }
+
+  const [left, top, right, bottom] = normalized;
+  if (right <= left || bottom <= top) {
+    return null;
+  }
+
+  return [
+    Math.max(0, Math.min(1, left)),
+    Math.max(0, Math.min(1, top)),
+    Math.max(0, Math.min(1, right)),
+    Math.max(0, Math.min(1, bottom)),
+  ];
+}
+
+type InkGroup = {
+  bbox: [number, number, number, number];
+  area: number;
+};
+
+async function detectFirstPageHeaderAnchors(
+  imageUrl: string,
+  pageNumber: number,
+): Promise<Partial<Record<ParsedFieldKey, HighlightTarget>>> {
+  const image = await loadPreviewImage(imageUrl);
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  if (!width || !height) {
+    return {};
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) {
+    return {};
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+  const imageData = context.getImageData(0, 0, width, height);
+
+  const anchors: Partial<Record<ParsedFieldKey, HighlightTarget>> = {};
+  const caseGroups = mergeCloseInkGroups(
+    findInkRowGroups(imageData, {
+      left: 0.6,
+      top: 0.04,
+      right: 0.95,
+      bottom: 0.25,
+    }),
+    0.006,
+  )
+    .filter((group) => {
+      const [left, top, right, bottom] = group.bbox;
+      return right - left >= 0.24 && top >= 0.075 && bottom <= 0.2;
+    })
+    .sort((a, b) => a.bbox[1] - b.bbox[1]);
+
+  const blackCaseGroup = caseGroups[0] ?? null;
+  const redCaseGroup = caseGroups[1] ?? null;
+
+  if (blackCaseGroup) {
+    anchors.caseBlackNo = {
+      pageNumber,
+      bbox: blackCaseGroup.bbox,
+    };
+  }
+  if (redCaseGroup) {
+    anchors.caseRedNo = {
+      pageNumber,
+      bbox: redCaseGroup.bbox,
+    };
+  }
+
+  const redBottom =
+    redCaseGroup?.bbox[3] ?? blackCaseGroup?.bbox[3] ?? 0.14;
+  const centerGroups = mergeCloseInkGroups(
+    findInkRowGroups(imageData, {
+      left: 0.25,
+      top: 0.14,
+      right: 0.75,
+      bottom: 0.36,
+    }),
+    0.008,
+  ).sort((a, b) => a.bbox[1] - b.bbox[1]);
+  const postHeaderGroups = centerGroups.filter(
+    (group) => group.bbox[1] > redBottom + 0.02,
+  );
+  const titleGroup = postHeaderGroups[0] ?? null;
+  const courtGroup = titleGroup
+    ? postHeaderGroups.find((group) => {
+        const [left, top, right] = group.bbox;
+        const widthRatio = right - left;
+        const centerX = (left + right) / 2;
+        return (
+          top > titleGroup.bbox[3] + 0.008 &&
+          widthRatio >= 0.08 &&
+          widthRatio <= 0.45 &&
+          centerX >= 0.32 &&
+          centerX <= 0.68
+        );
+      })
+    : null;
+
+  if (courtGroup) {
+    anchors.courtName = {
+      pageNumber,
+      bbox: courtGroup.bbox,
+    };
+  }
+
+  return anchors;
+}
+
+function loadPreviewImage(imageUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new window.Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Unable to load preview image.'));
+    image.src = imageUrl;
+  });
+}
+
+function findInkRowGroups(
+  imageData: ImageData,
+  region: { left: number; top: number; right: number; bottom: number },
+): InkGroup[] {
+  const { data, width, height } = imageData;
+  const left = Math.max(0, Math.floor(width * region.left));
+  const right = Math.min(width, Math.ceil(width * region.right));
+  const top = Math.max(0, Math.floor(height * region.top));
+  const bottom = Math.min(height, Math.ceil(height * region.bottom));
+  const rowCount = Math.max(0, bottom - top);
+  if (rowCount === 0 || right <= left) {
+    return [];
+  }
+
+  const rowInk = new Uint32Array(rowCount);
+  for (let y = top; y < bottom; y += 1) {
+    let count = 0;
+    for (let x = left; x < right; x += 1) {
+      const offset = (y * width + x) * 4;
+      if (
+        data[offset + 3] > 0 &&
+        data[offset] < 90 &&
+        data[offset + 1] < 90 &&
+        data[offset + 2] < 90
+      ) {
+        count += 1;
+      }
+    }
+    rowInk[y - top] = count;
+  }
+
+  const minInkPerRow = Math.max(8, Math.floor((right - left) * 0.008));
+  const rawGroups: Array<[number, number]> = [];
+  let start: number | null = null;
+  for (let row = 0; row < rowInk.length; row += 1) {
+    if (rowInk[row] >= minInkPerRow) {
+      if (start === null) {
+        start = row;
+      }
+      continue;
+    }
+
+    if (start !== null) {
+      if (row - start >= 4) {
+        rawGroups.push([start, row - 1]);
+      }
+      start = null;
+    }
+  }
+  if (start !== null && rowInk.length - start >= 4) {
+    rawGroups.push([start, rowInk.length - 1]);
+  }
+
+  return rawGroups
+    .map(([rowStart, rowEnd]) =>
+      buildInkGroup(imageData, left, right, top + rowStart, top + rowEnd),
+    )
+    .filter((group): group is InkGroup => Boolean(group));
+}
+
+function buildInkGroup(
+  imageData: ImageData,
+  leftBound: number,
+  rightBound: number,
+  top: number,
+  bottom: number,
+): InkGroup | null {
+  const { data, width, height } = imageData;
+  let left = rightBound;
+  let right = leftBound;
+  let area = 0;
+
+  for (let y = top; y <= bottom && y < height; y += 1) {
+    for (let x = leftBound; x < rightBound; x += 1) {
+      const offset = (y * width + x) * 4;
+      if (
+        data[offset + 3] > 0 &&
+        data[offset] < 90 &&
+        data[offset + 1] < 90 &&
+        data[offset + 2] < 90
+      ) {
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        area += 1;
+      }
+    }
+  }
+
+  if (area === 0 || right <= left) {
+    return null;
+  }
+
+  return {
+    bbox: [left / width, top / height, right / width, bottom / height],
+    area,
+  };
+}
+
+function mergeCloseInkGroups(groups: InkGroup[], maxGap: number): InkGroup[] {
+  const sorted = [...groups].sort((a, b) => a.bbox[1] - b.bbox[1]);
+  const merged: InkGroup[] = [];
+  for (const group of sorted) {
+    const previous = merged[merged.length - 1];
+    if (!previous || group.bbox[1] - previous.bbox[3] > maxGap) {
+      merged.push({ ...group });
+      continue;
+    }
+
+    previous.bbox = [
+      Math.min(previous.bbox[0], group.bbox[0]),
+      Math.min(previous.bbox[1], group.bbox[1]),
+      Math.max(previous.bbox[2], group.bbox[2]),
+      Math.max(previous.bbox[3], group.bbox[3]),
+    ];
+    previous.area += group.area;
+  }
+
+  return merged;
+}
+
 function getPageText(page: ImportPageAsset): string {
   return page.corrected_markdown || page.markdown || page.raw_markdown || '';
 }
@@ -1233,7 +2026,8 @@ function resolveFilingStartDate(scopeText: string): string | null {
 
   if (nextDayDateText) {
     return (
-      shiftThaiDateText(nextDayDateText, 1) || normalizeThaiDateDisplay(nextDayDateText)
+      shiftThaiDateText(nextDayDateText, 1) ||
+      normalizeThaiDateDisplay(nextDayDateText)
     );
   }
 
@@ -1255,7 +2049,12 @@ function normalizeThaiDateDisplay(value: string): string {
   if (!parsed) {
     return cleanupDateText(value);
   }
-  return formatThaiDateText(parsed.day, parsed.monthIndex, parsed.ceYear, parsed);
+  return formatThaiDateText(
+    parsed.day,
+    parsed.monthIndex,
+    parsed.ceYear,
+    parsed,
+  );
 }
 
 function shiftThaiDateText(value: string, days: number): string | null {
@@ -1264,7 +2063,9 @@ function shiftThaiDateText(value: string, days: number): string | null {
     return null;
   }
 
-  const shifted = new Date(Date.UTC(parsed.ceYear, parsed.monthIndex, parsed.day));
+  const shifted = new Date(
+    Date.UTC(parsed.ceYear, parsed.monthIndex, parsed.day),
+  );
   shifted.setUTCDate(shifted.getUTCDate() + days);
 
   return formatThaiDateText(
@@ -1277,7 +2078,9 @@ function shiftThaiDateText(value: string, days: number): string | null {
 
 function parseThaiDateText(value: string): ParsedThaiDate | null {
   const cleaned = cleanupDateText(value);
-  const match = cleaned.match(/([0-9๐-๙]{1,2})\s*([^\d๐-๙\s]+)\s*([0-9๐-๙]{4})/);
+  const match = cleaned.match(
+    /([0-9๐-๙]{1,2})\s*([^\d๐-๙\s]+)\s*([0-9๐-๙]{4})/,
+  );
   if (!match) {
     return null;
   }
@@ -1286,7 +2089,11 @@ function parseThaiDateText(value: string): ParsedThaiDate | null {
   const yearValue = Number(thaiDigitsToArabic(match[3]));
   const monthIndex = THAI_MONTH_LOOKUP.get(normalizeThaiMonthToken(match[2]));
 
-  if (!Number.isFinite(dayValue) || !Number.isFinite(yearValue) || monthIndex == null) {
+  if (
+    !Number.isFinite(dayValue) ||
+    !Number.isFinite(yearValue) ||
+    monthIndex == null
+  ) {
     return null;
   }
 
@@ -1364,7 +2171,8 @@ function extractKeywordWindows(
     let collectedLength = 0;
     for (
       let cursor = blockIndex;
-      cursor < blocks.length && (captureToPageEnd || grouped.length < maxBlocks);
+      cursor < blocks.length &&
+      (captureToPageEnd || grouped.length < maxBlocks);
       cursor += 1
     ) {
       const candidate = blocks[cursor];
@@ -1476,7 +2284,9 @@ function splitMarkdownIntoBlocks(markdown: string): string[] {
 }
 
 function isMarkdownPageMarker(line: string): boolean {
-  return /^#{1,6}\s*page\s+\d+\s*$/i.test(line) || /^page\s+\d+\s*$/i.test(line);
+  return (
+    /^#{1,6}\s*page\s+\d+\s*$/i.test(line) || /^page\s+\d+\s*$/i.test(line)
+  );
 }
 
 function buildKeywordWindowBbox(
@@ -1523,7 +2333,11 @@ function buildKeywordWindowBbox(
       const seedTop = seedBbox[1];
       const seedBottom = seedBbox[3];
 
-      for (let i = seedIndex + 1; i < sorted.length && grouped.length < 96; i += 1) {
+      for (
+        let i = seedIndex + 1;
+        i < sorted.length && grouped.length < 96;
+        i += 1
+      ) {
         const candidate = sorted[i];
         const candidateCompact = compactForCompare(
           normalizeText(getSegmentSearchText(candidate)),
@@ -1543,7 +2357,10 @@ function buildKeywordWindowBbox(
         const overlapsKeywordBand =
           x2 >= seedBbox[0] - 0.12 && x1 <= seedBbox[2] + 0.12;
         const overlapsGroupedText =
-          horizontalOverlapRatio(mergeBboxes(grouped.map((segment) => segment.bbox)) || seedBbox, candidate.bbox) >= 0.02;
+          horizontalOverlapRatio(
+            mergeBboxes(grouped.map((segment) => segment.bbox)) || seedBbox,
+            candidate.bbox,
+          ) >= 0.02;
         if (!overlapsKeywordBand && !overlapsGroupedText) {
           continue;
         }
@@ -1659,7 +2476,8 @@ function buildKeywordWindowBbox(
         }
 
         const isReasonablyNear =
-          verticalGap <= 0.12 && (horizontalScore >= 0.04 || candidateCompact.length >= 6);
+          verticalGap <= 0.12 &&
+          (horizontalScore >= 0.04 || candidateCompact.length >= 6);
         if (!isReasonablyNear) {
           continue;
         }
@@ -1876,9 +2694,7 @@ function getSegmentDisplayText(segment: TextSegment): string {
 }
 
 function stripOcrLineDecorators(value: string): string {
-  return value
-    .replace(/^\s{0,3}(?:#{1,6}|[-*+]|>\s*)\s+/u, '')
-    .trim();
+  return value.replace(/^\s{0,3}(?:#{1,6}|[-*+]|>\s*)\s+/u, '').trim();
 }
 
 function extractDisplayTextFromBbox(
@@ -1998,7 +2814,9 @@ function findCaseHeaderInfo(page: ImportPageAsset): CaseHeaderInfo {
     CASE_BLACK_MARKERS,
   );
 
-  const redLine = redSegment ? normalizeText(getSegmentSearchText(redSegment)) : '';
+  const redLine = redSegment
+    ? normalizeText(getSegmentSearchText(redSegment))
+    : '';
   const blackLine = blackSegment
     ? normalizeText(getSegmentSearchText(blackSegment))
     : '';
@@ -2008,7 +2826,11 @@ function findCaseHeaderInfo(page: ImportPageAsset): CaseHeaderInfo {
   const blackNo = blackLine
     ? pickFirst(blackLine, CASE_BLACK_PATTERNS)
     : pickFirst(getPageText(page), CASE_BLACK_PATTERNS);
-  const inferredAnchors = inferStackedCaseAnchors(page, redSegment, blackSegment);
+  const inferredAnchors = inferStackedCaseAnchors(
+    page,
+    redSegment,
+    blackSegment,
+  );
 
   return {
     redNo,
@@ -2018,7 +2840,7 @@ function findCaseHeaderInfo(page: ImportPageAsset): CaseHeaderInfo {
       (redSegment
         ? {
             pageNumber: page.page_number,
-            bbox: getSegmentAnchorBbox(redSegment),
+            bbox: getCaseAnchorBbox(redSegment, 'red'),
           }
         : null),
     blackAnchor:
@@ -2026,7 +2848,7 @@ function findCaseHeaderInfo(page: ImportPageAsset): CaseHeaderInfo {
       (blackSegment
         ? {
             pageNumber: page.page_number,
-            bbox: getSegmentAnchorBbox(blackSegment),
+            bbox: getCaseAnchorBbox(blackSegment, 'black'),
           }
         : null),
   };
@@ -2079,18 +2901,17 @@ function inferStackedCaseAnchors(
   if (!blackLooksDetached) {
     return { redAnchor: null, blackAnchor: null };
   }
-
-  const height = Math.max(0.018, redBox[3] - redBox[1]);
-  const yShift = Math.min(0.05, height * 1.45);
+  const stackedBlackBox = getCaseAnchorBbox(redSegment, 'black');
+  const stackedRedBox = getCaseAnchorBbox(redSegment, 'red');
 
   return {
     blackAnchor: {
       pageNumber: page.page_number,
-      bbox: redBox,
+      bbox: stackedBlackBox,
     },
     redAnchor: {
       pageNumber: page.page_number,
-      bbox: shiftBbox(redBox, 0, yShift),
+      bbox: stackedRedBox,
     },
   };
 }
@@ -2141,43 +2962,24 @@ function getCourtAnchorBbox(
   page: ImportPageAsset,
   courtSegment: TextSegment,
 ): [number, number, number, number] {
-  const baseBox = getSegmentAnchorBbox(courtSegment);
-  if (baseBox[1] > 0.26) {
-    return baseBox;
+  const directMatch = findBestSegmentBboxByText(
+    page,
+    getSegmentDisplayText(courtSegment),
+  );
+  if (directMatch) {
+    return insetBbox(directMatch, 0.0025, 0.0015);
   }
 
-  const baseCenterX = (baseBox[0] + baseBox[2]) / 2;
-  const below = page.segments
-    .map((segment) => ({
-      segment,
-      bbox: getSegmentAnchorBbox(segment),
-    }))
-    .filter(({ segment, bbox }) => {
-      if (segment.id === courtSegment.id) {
-        return false;
-      }
-      const verticalGap = bbox[1] - baseBox[1];
-      if (verticalGap <= 0.01 || verticalGap > 0.07) {
-        return false;
-      }
+  const lineBboxes = getSegmentLineBboxes(courtSegment);
+  const centeredLine =
+    lineBboxes.find((bbox) => {
       const centerX = (bbox[0] + bbox[2]) / 2;
-      const isCenteredHeaderLine = centerX > 0.35 && centerX < 0.7;
-      const closeToCourtColumn = Math.abs(centerX - baseCenterX) < 0.18;
-      return isCenteredHeaderLine || closeToCourtColumn;
-    })
-    .sort((a, b) => a.bbox[1] - b.bbox[1])[0];
+      return centerX >= 0.28 && centerX <= 0.72;
+    }) ||
+    lineBboxes[0] ||
+    getSegmentAnchorBbox(courtSegment);
 
-  if (!below) {
-    return baseBox;
-  }
-
-  const height = baseBox[3] - baseBox[1];
-  return [
-    baseBox[0],
-    below.bbox[1],
-    baseBox[2],
-    Math.min(1, below.bbox[1] + height),
-  ];
+  return insetBbox(centeredLine, 0.0025, 0.0015);
 }
 
 function shiftBbox(
@@ -2203,9 +3005,276 @@ function getSegmentAnchorBbox(
   return segment.bbox;
 }
 
+function getSegmentLineBboxes(
+  segment: TextSegment,
+): [number, number, number, number][] {
+  const rawBboxes =
+    Array.isArray(segment.bboxes) && segment.bboxes.length > 0
+      ? segment.bboxes
+      : [segment.bbox];
+
+  return rawBboxes
+    .map((bbox) => normalizeBbox(bbox))
+    .filter((bbox): bbox is [number, number, number, number] => Boolean(bbox))
+    .sort((left, right) => {
+      if (Math.abs(left[1] - right[1]) > 0.003) {
+        return left[1] - right[1];
+      }
+      return left[0] - right[0];
+    });
+}
+
+function findHeaderAnchorByFieldValue(
+  page: ImportPageAsset,
+  key: ParsedFieldKey,
+  value: string | null,
+): HighlightTarget | null {
+  if (!value) {
+    return null;
+  }
+
+  if (key === 'caseBlackNo' || key === 'caseRedNo') {
+    const bbox = findCaseAnchorByValue(page, key, value);
+    return bbox
+      ? {
+          pageNumber: page.page_number,
+          bbox,
+        }
+      : null;
+  }
+
+  if (key === 'courtName') {
+    const bbox = findCourtAnchorByValue(page, value);
+    return bbox
+      ? {
+          pageNumber: page.page_number,
+          bbox,
+        }
+      : null;
+  }
+
+  return null;
+}
+
+function findCaseAnchorByValue(
+  page: ImportPageAsset,
+  key: 'caseBlackNo' | 'caseRedNo',
+  value: string,
+): [number, number, number, number] | null {
+  const target = compactForCompare(normalizeText(value));
+  if (!target) {
+    return null;
+  }
+
+  const markerText =
+    key === 'caseBlackNo' ? THAI_BLACK_MARKER : THAI_RED_MARKER;
+  let bestMatch: {
+    bbox: [number, number, number, number];
+    score: number;
+  } | null = null;
+
+  for (const segment of page.segments) {
+    const text = normalizeText(getSegmentSearchText(segment));
+    const compactText = compactForCompare(text);
+    if (!compactText) {
+      continue;
+    }
+
+    const baseBox = getSegmentAnchorBbox(segment);
+    if (baseBox[1] > 0.24 || baseBox[0] < 0.42) {
+      continue;
+    }
+
+    const hasTarget =
+      compactText.includes(target) || target.includes(compactText);
+    const hasMarker = text.includes(markerText);
+    const hasDigits = /[0-9๐-๙]/u.test(text);
+    if (!hasTarget && !(hasMarker && hasDigits)) {
+      continue;
+    }
+
+    const valueSimilarity = hasTarget
+      ? Math.min(target.length, compactText.length) /
+        Math.max(target.length, compactText.length)
+      : 0;
+    const noisyHeaderPenalty = text.includes('สำหรับศาลใช้') ? 2.5 : 0;
+    const score =
+      valueSimilarity * 8 +
+      (hasTarget ? 3 : 0) +
+      (hasMarker ? 2 : 0) +
+      (hasDigits ? 1 : 0) -
+      baseBox[1] * 2.5 -
+      noisyHeaderPenalty;
+
+    const bbox =
+      text.includes(THAI_BLACK_MARKER) && text.includes(THAI_RED_MARKER)
+        ? getCaseAnchorBbox(segment, key === 'caseBlackNo' ? 'black' : 'red')
+        : insetBbox(baseBox, 0.0025, 0.0015);
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { bbox, score };
+    }
+  }
+
+  return bestMatch?.bbox || null;
+}
+
+function findCourtAnchorByValue(
+  page: ImportPageAsset,
+  value: string,
+): [number, number, number, number] | null {
+  const target = compactForCompare(normalizeText(value));
+  if (!target) {
+    return null;
+  }
+
+  let bestMatch: {
+    bbox: [number, number, number, number];
+    score: number;
+  } | null = null;
+
+  for (const segment of page.segments) {
+    const text = normalizeText(getSegmentSearchText(segment));
+    const compactText = compactForCompare(text);
+    if (!compactText) {
+      continue;
+    }
+
+    const bbox = getSegmentAnchorBbox(segment);
+    const centerX = (bbox[0] + bbox[2]) / 2;
+    const hasTarget =
+      compactText.includes(target) || target.includes(compactText);
+    const looksLikeCourt = text.startsWith('ศาล');
+    if (!hasTarget && !looksLikeCourt) {
+      continue;
+    }
+    if (bbox[1] < 0.18 || bbox[1] > 0.5) {
+      continue;
+    }
+
+    const valueSimilarity = hasTarget
+      ? Math.min(target.length, compactText.length) /
+        Math.max(target.length, compactText.length)
+      : 0;
+    const centerScore = 1 - Math.min(1, Math.abs(centerX - 0.5) / 0.25);
+    const noisyHeaderPenalty = text.includes('สำหรับศาลใช้') ? 3 : 0;
+    const score =
+      valueSimilarity * 9 +
+      (looksLikeCourt ? 2 : 0) +
+      centerScore * 2 -
+      noisyHeaderPenalty -
+      Math.abs(bbox[1] - 0.34) * 3;
+
+    const anchoredBbox = insetBbox(bbox, 0.0025, 0.0015);
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { bbox: anchoredBbox, score };
+    }
+  }
+
+  return bestMatch?.bbox || null;
+}
+
+function getCaseAnchorBbox(
+  segment: TextSegment,
+  variant: 'black' | 'red',
+): [number, number, number, number] {
+  const text = normalizeText(getSegmentSearchText(segment));
+  const lineBboxes = getSegmentLineBboxes(segment);
+  const hasBothMarkers =
+    text.includes(THAI_BLACK_MARKER) && text.includes(THAI_RED_MARKER);
+
+  if (lineBboxes.length >= 2) {
+    const selected =
+      variant === 'black' ? lineBboxes[0] : lineBboxes[lineBboxes.length - 1];
+    return insetBbox(selected, 0.0025, 0.0015);
+  }
+
+  const baseBox = getSegmentAnchorBbox(segment);
+  if (hasBothMarkers) {
+    return insetBbox(
+      splitBboxVertically(baseBox, variant === 'black' ? 0 : 1, 2),
+      0.0025,
+      0.0015,
+    );
+  }
+
+  return insetBbox(baseBox, 0.0025, 0.0015);
+}
+
+function splitBboxVertically(
+  bbox: [number, number, number, number],
+  index: number,
+  totalParts: number,
+): [number, number, number, number] {
+  const clampedParts = Math.max(1, totalParts);
+  const clampedIndex = Math.min(Math.max(0, index), clampedParts - 1);
+  const height = (bbox[3] - bbox[1]) / clampedParts;
+  const top = bbox[1] + height * clampedIndex;
+  const bottom =
+    clampedIndex === clampedParts - 1 ? bbox[3] : Math.min(1, top + height);
+
+  return [bbox[0], top, bbox[2], bottom];
+}
+
+function insetBbox(
+  bbox: [number, number, number, number],
+  insetX: number,
+  insetY: number,
+): [number, number, number, number] {
+  const maxInsetX = Math.max(0, Math.min(insetX, (bbox[2] - bbox[0]) * 0.22));
+  const maxInsetY = Math.max(0, Math.min(insetY, (bbox[3] - bbox[1]) * 0.22));
+
+  return [
+    Math.max(0, bbox[0] + maxInsetX),
+    Math.max(0, bbox[1] + maxInsetY),
+    Math.min(1, bbox[2] - maxInsetX),
+    Math.min(1, bbox[3] - maxInsetY),
+  ];
+}
+
+function findBestSegmentBboxByText(
+  page: ImportPageAsset,
+  value: string,
+): [number, number, number, number] | null {
+  const target = compactForCompare(normalizeText(value));
+  if (target.length < 3) {
+    return null;
+  }
+
+  let bestMatch: {
+    bbox: [number, number, number, number];
+    score: number;
+  } | null = null;
+
+  for (const segment of page.segments) {
+    const segmentText = compactForCompare(
+      normalizeText(getSegmentSearchText(segment)),
+    );
+    if (!segmentText) {
+      continue;
+    }
+    if (!target.includes(segmentText) && !segmentText.includes(target)) {
+      continue;
+    }
+
+    const bbox = getSegmentAnchorBbox(segment);
+    const overlapScore =
+      Math.min(target.length, segmentText.length) /
+      Math.max(target.length, segmentText.length);
+    const width = bbox[2] - bbox[0];
+    const score = overlapScore - bbox[1] * 0.15 - width * 0.04;
+
+    if (!bestMatch || score > bestMatch.score) {
+      bestMatch = { bbox, score };
+    }
+  }
+
+  return bestMatch?.bbox || null;
+}
+
 function getHighlightStyle(bbox: [number, number, number, number]) {
-  const xPadding = 0.006;
-  const yPadding = 0.002;
+  const xPadding = 0.06;
+  const yPadding = 0.006;
   const left = Math.max(bbox[0] - xPadding, 0);
   const top = Math.max(bbox[1] - yPadding, 0);
   const right = Math.min(bbox[2] + xPadding, 1);

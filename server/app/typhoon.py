@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import tempfile
 import urllib.error
 import urllib.request
+from collections import Counter
+from dataclasses import replace
 from difflib import SequenceMatcher
 from itertools import permutations
 from io import BytesIO
@@ -33,6 +36,34 @@ def _is_ollama_generate_url(raw_url: str) -> bool:
     return parsed.path.rstrip("/") == "/api/generate"
 
 
+def _is_ollama_chat_url(raw_url: str) -> bool:
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return False
+    return parsed.path.rstrip("/") == "/api/chat"
+
+
+def _resolve_ocr_task_type(settings: Settings) -> str:
+    normalized_model = settings.ocr_model.strip().lower()
+    if "typhoon-ocr1.5" in normalized_model:
+        return "v1.5"
+
+    legacy_model_markers = (
+        "typhoon-ocr-preview",
+        "typhoon-ocr-7b",
+        "typhoon-ocr-3b",
+    )
+    if any(marker in normalized_model for marker in legacy_model_markers):
+        # Legacy Typhoon OCR models expect the older prompt family with anchor text.
+        return "structure"
+    return "v1.5"
+
+
+def _resolve_ocr_repeat_penalty(task_type: str) -> float:
+    return 1.1 if task_type == "v1.5" else 1.2
+
+
 def validate_extension(file_path: Path) -> None:
     suffix = file_path.suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
@@ -57,18 +88,100 @@ def _normalize_ocr_response(raw_output: str) -> str:
     if not content:
         return raw_output
 
+    if content.startswith("```") and content.endswith("```"):
+        lines = content.splitlines()
+        if len(lines) >= 2:
+            content = "\n".join(lines[1:-1]).strip()
+
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError:
-        return raw_output
+        parsed = None
 
     if isinstance(parsed, dict):
         for key in ("natural_text", "markdown", "text", "content", "result"):
             value = parsed.get(key)
             if isinstance(value, str) and value.strip():
-                return value
+                return _strip_ocr_non_text_blocks(value)
 
-    return raw_output
+    for key in ("natural_text", "markdown", "text", "content", "result"):
+        marker = f'"{key}"'
+        marker_index = content.find(marker)
+        if marker_index < 0:
+            continue
+
+        colon_index = content.find(":", marker_index + len(marker))
+        if colon_index < 0:
+            continue
+
+        value = content[colon_index + 1 :].strip()
+        if value.endswith("}"):
+            value = value[:-1].rstrip()
+        if value.startswith('"'):
+            value = value[1:]
+        if value.endswith('"'):
+            value = value[:-1]
+
+        value = (
+            value.replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+            .strip()
+        )
+        if value:
+            return _strip_ocr_non_text_blocks(value)
+
+    return _strip_ocr_non_text_blocks(raw_output)
+
+
+def _strip_ocr_non_text_blocks(text: str) -> str:
+    return re.sub(r"\n?\s*<figure>.*?</figure>\s*\n?", "\n", text, flags=re.IGNORECASE | re.DOTALL).strip()
+
+
+def _adapt_ocr_prompt_for_model(prompt_text: str, task_type: str) -> str:
+    if task_type != "v1.5":
+        return prompt_text
+
+    return (
+        prompt_text.rstrip()
+        + "\n\n"
+        + "Additional OCR rules for Thai legal documents:\n"
+        + "- Transcribe only visible document text.\n"
+        + "- Do not describe seals, logos, Garuda emblems, signatures, stamps, borders, or page decorations.\n"
+        + "- Do not output <figure> blocks or visual summaries.\n"
+        + "- Preserve Thai numerals, case numbers, dates, money amounts, and line order exactly."
+    )
+
+
+def _extract_json_object(raw_output: str) -> dict[str, object]:
+    content = raw_output.strip()
+    if not content:
+        raise ValueError("Vision model returned an empty response.")
+
+    if content.startswith("```") and content.endswith("```"):
+        lines = content.splitlines()
+        if len(lines) >= 2:
+            content = "\n".join(lines[1:-1]).strip()
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        parsed = None
+
+    if isinstance(parsed, dict):
+        return parsed
+
+    start_index = content.find("{")
+    end_index = content.rfind("}")
+    if start_index >= 0 and end_index > start_index:
+        candidate = content[start_index : end_index + 1]
+        parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise ValueError("Vision model did not return a valid JSON object.")
 
 
 def _extract_prompt_and_image_from_messages(messages: list[dict[str, object]]) -> tuple[str, str]:
@@ -109,10 +222,11 @@ def _run_ollama_generate_ocr(
         pdf_or_image_path=str(file_path),
         task_type=task_type,
         target_image_dim=target_image_dim,
-        page_num=page_number if page_number is not None else 1,
+        page_num=page_number if page_number is not None and file_path.suffix.lower() == ".pdf" else 1,
         figure_language="Thai",
     )
     prompt_text, image_base64 = _extract_prompt_and_image_from_messages(messages)
+    prompt_text = _adapt_ocr_prompt_for_model(prompt_text, task_type)
     payload = {
         "model": settings.ocr_model,
         "prompt": prompt_text,
@@ -121,7 +235,7 @@ def _run_ollama_generate_ocr(
         "options": {
             "temperature": 0.1,
             "top_p": 0.6,
-            "repeat_penalty": 1.5,
+            "repeat_penalty": _resolve_ocr_repeat_penalty(task_type),
             "num_predict": settings.ocr_num_predict,
         },
     }
@@ -153,7 +267,7 @@ def _run_ocr(
     page_number: int | None,
     target_image_dim: int,
 ) -> str:
-    task_type = "v1.5"
+    task_type = _resolve_ocr_task_type(settings)
     kwargs = {
         "pdf_or_image_path": str(file_path),
         "base_url": settings.ocr_base_url,
@@ -173,6 +287,25 @@ def _run_ocr(
             task_type=task_type,
         )
     return _normalize_ocr_response(ocr_document(**kwargs))
+
+
+def _ocr_models_to_try(settings: Settings) -> tuple[str, ...]:
+    models: list[str] = []
+    for model in (settings.ocr_model, *settings.ocr_compare_models):
+        normalized_model = model.strip()
+        if normalized_model and normalized_model not in models:
+            models.append(normalized_model)
+    return tuple(models)
+
+
+def _settings_for_ocr_model(settings: Settings, model: str) -> Settings:
+    if model == settings.ocr_model:
+        return settings
+    return replace(settings, ocr_model=model)
+
+
+def _short_model_name(model: str) -> str:
+    return model.rsplit("/", 1)[-1].replace(":latest", "")
 
 
 def _render_pdf_page_image(file_path: Path, page_number: int, target_image_dim: int = 1400) -> Image.Image:
@@ -318,6 +451,7 @@ def _score_ocr_markdown(markdown: str) -> float:
     non_space_characters = sum(1 for character in markdown if not character.isspace())
     replacement_characters = markdown.count("\ufffd")
     short_line_count = sum(1 for line in candidate_lines if _normalized_text_length(line) <= 2)
+    repeated_watermark_penalty = 2800.0 if _looks_like_repeated_watermark_ocr(markdown) else 0.0
 
     return (
         float(non_space_characters)
@@ -325,6 +459,7 @@ def _score_ocr_markdown(markdown: str) -> float:
         + (len(candidate_blocks) * 24.0)
         - (short_line_count * 12.0)
         - (replacement_characters * 80.0)
+        - repeated_watermark_penalty
     )
 
 
@@ -373,12 +508,37 @@ def _looks_like_generic_image_description(markdown: str) -> bool:
     )
 
 
+def _looks_like_repeated_watermark_ocr(markdown: str) -> bool:
+    candidate_lines = [line.strip() for line in _extract_candidate_lines(markdown) if line.strip()]
+    if len(candidate_lines) < 6:
+        return False
+
+    normalized_lines = [_normalize_text_for_similarity(line) for line in candidate_lines]
+    normalized_lines = [line for line in normalized_lines if len(line) >= 8]
+    if len(normalized_lines) < 6:
+        return False
+
+    line_counts = Counter(normalized_lines)
+    most_common_line, most_common_count = line_counts.most_common(1)[0]
+    repeated_ratio = most_common_count / max(len(normalized_lines), 1)
+    has_watermark_phrase = "สำหรับเรียก" in most_common_line and "เท่านั้น" in most_common_line
+    return (
+        most_common_count >= 6
+        and (
+            repeated_ratio >= 0.35
+            or (has_watermark_phrase and most_common_count >= 3)
+        )
+    )
+
+
 def _cleaned_ocr_needs_comparison(markdown: str) -> bool:
     normalized_length = _normalized_text_length(markdown)
     candidate_blocks = _extract_candidate_blocks(markdown)
     if not markdown.strip():
         return True
     if _looks_like_generic_image_description(markdown):
+        return True
+    if _looks_like_repeated_watermark_ocr(markdown):
         return True
     if normalized_length < 120:
         return True
@@ -650,7 +810,41 @@ def _detect_line_boxes(image: Image.Image) -> list[tuple[int, int, int, int]]:
     for row_boxes in ordered_rows:
         ordered_boxes.extend(row_boxes)
 
-    return ordered_boxes
+    return _suppress_contained_line_boxes(ordered_boxes)
+
+
+def _suppress_contained_line_boxes(
+    boxes: list[tuple[int, int, int, int]],
+) -> list[tuple[int, int, int, int]]:
+    filtered_boxes: list[tuple[int, int, int, int]] = []
+    for index, box in enumerate(boxes):
+        x0, y0, x1, y1 = box
+        width = max(x1 - x0, 1)
+        height = max(y1 - y0, 1)
+        center_x = (x0 + x1) / 2
+        is_contained_fragment = False
+
+        for other_index, other_box in enumerate(boxes):
+            if index == other_index:
+                continue
+
+            other_x0, other_y0, other_x1, other_y1 = other_box
+            other_width = max(other_x1 - other_x0, 1)
+            if other_width < width * 2.8:
+                continue
+
+            vertical_overlap = max(0, min(y1, other_y1) - max(y0, other_y0))
+            if vertical_overlap / height < 0.55:
+                continue
+
+            if other_x0 - 8 <= center_x <= other_x1 + 8:
+                is_contained_fragment = True
+                break
+
+        if not is_contained_fragment:
+            filtered_boxes.append(box)
+
+    return filtered_boxes
 
 
 def _group_line_boxes_into_review_blocks(
@@ -807,6 +1001,13 @@ def _box_skip_cost(
     if width < page_width * 0.12:
         cost -= 0.18
 
+    if (
+        page_width * 0.35 <= center_x <= page_width * 0.65
+        and page_height * 0.12 <= y0 <= page_height * 0.25
+        and width < page_width * 0.16
+    ):
+        cost -= 0.5
+
     if y0 > page_height * 0.88:
         cost -= 0.56
     if y0 > page_height * 0.93:
@@ -903,7 +1104,6 @@ def _select_best_box_subset(
     choice: list[list[tuple[int, int, str] | None]] = [[None] * (m + 1) for _ in range(n + 1)]
     dp[0][0] = 0.0
 
-    max_group_size = min(8, m)
     for i in range(n + 1):
         for j in range(m + 1):
             if dp[i][j] == float("inf"):
@@ -922,6 +1122,7 @@ def _select_best_box_subset(
             if i >= n:
                 continue
 
+            max_group_size = max(8, min(64, (text_lengths[i] + 23) // 24))
             max_end = min(m, j + max_group_size)
             for end in range(j + 1, max_end + 1):
                 if (m - end) < (n - (i + 1)):
@@ -998,6 +1199,8 @@ def _filter_segment_candidate_line_entries(candidate_lines: list[str]) -> list[t
             and not _prefers_own_review_block(line)
         )
         if compact_line == "รายละเอียด" and previous_length >= 24 and next_length >= 24:
+            continue
+        if compact_line == "ผู้พิพากษา":
             continue
         if is_midstream_short_artifact:
             continue
@@ -1217,6 +1420,67 @@ def _image_to_data_url(image: Image.Image) -> str:
     image.save(buffer, format="PNG")
     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
+
+
+def _image_to_base64_png(image: Image.Image) -> str:
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def run_vision_json(
+    *,
+    image: Image.Image,
+    prompt: str,
+    settings: Settings,
+) -> dict[str, object]:
+    if not settings.vision_ready:
+        raise RuntimeError("Vision model is not configured.")
+    if not _is_ollama_chat_url(settings.vision_base_url):
+        raise RuntimeError(
+            f"Unsupported vision endpoint: {settings.vision_base_url}. Expected an Ollama /api/chat URL."
+        )
+
+    payload = {
+        "model": settings.vision_model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt,
+                "images": [_image_to_base64_png(image.convert("RGB"))],
+            }
+        ],
+        "stream": False,
+        "format": "json",
+        "options": {
+            "temperature": 0,
+            "top_p": 0.3,
+            "num_predict": settings.vision_num_predict,
+        },
+    }
+    request = urllib.request.Request(
+        settings.vision_base_url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=settings.vision_timeout_seconds) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Ollama vision failed with HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Ollama vision endpoint is not reachable: {exc}") from exc
+
+    message = response_payload.get("message")
+    if isinstance(message, dict):
+        raw_output = str(message.get("content") or "")
+    else:
+        raw_output = str(response_payload.get("response") or "")
+    if not raw_output.strip():
+        raise RuntimeError(f"Ollama vision returned an empty response: {response_payload}")
+    return _extract_json_object(raw_output)
 
 
 def _score_segment_for_vision_review(segment: dict[str, object]) -> tuple[float, list[str]]:
@@ -1675,6 +1939,34 @@ def _build_cleaned_input(
     return temp_path
 
 
+def _build_aggressive_ocr_input(
+    file_path: Path,
+    page_number: int,
+) -> Path:
+    if file_path.suffix.lower() == ".pdf":
+        source_image = _render_pdf_page_image(file_path, page_number)
+    else:
+        with Image.open(file_path) as image:
+            source_image = image.convert("RGB")
+
+    grayscale = np.array(source_image.convert("L"))
+    blurred = cv2.medianBlur(grayscale, 3)
+    binary = cv2.adaptiveThreshold(
+        blurred,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        13,
+    )
+    aggressive_image = Image.fromarray(binary).filter(ImageFilter.SHARPEN).convert("RGB")
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    temp_path = Path(temp_file.name)
+    temp_file.close()
+    aggressive_image.save(temp_path, format="PNG")
+    return temp_path
+
+
 def run_ocr_page(
     file_path: Path,
     page_number: int,
@@ -1743,6 +2035,14 @@ def run_ocr_page(
             cleaned_input_path.unlink(missing_ok=True)
 
 
+def _contains_latin_case_series(markdown: str | None) -> bool:
+    if not markdown:
+        return False
+
+    compact = "".join(str(markdown).split())
+    return bool(re.search(r"[A-Za-z][0-9๐-๙]{3,}/[0-9๐-๙]{2,4}", compact))
+
+
 def compare_ocr_page_sources(
     *,
     original_file_path: Path,
@@ -1750,123 +2050,248 @@ def compare_ocr_page_sources(
     page_number: int,
     settings: Settings,
 ) -> dict[str, object]:
-    candidates: dict[str, str] = {}
-    scores: dict[str, float] = {}
+    candidate_records: list[dict[str, object]] = []
     errors: dict[str, str] = {}
     suspicious_reasons: list[str] = []
+    temp_candidate_paths: list[Path] = []
+    ocr_models = _ocr_models_to_try(settings)
 
-    def run_candidate(label: str, file_path: Path) -> None:
+    def run_candidate(
+        source_label: str,
+        file_path: Path,
+        *,
+        source_is_cleaned: bool,
+        model: str,
+    ) -> None:
+        candidate_label = f"{source_label}:{_short_model_name(model)}"
         if not file_path.exists():
-            errors[label] = f"File not found: {file_path}"
+            errors[candidate_label] = f"File not found: {file_path}"
             return
 
         try:
             markdown = run_ocr_page(
                 file_path,
                 page_number,
-                settings,
-                source_is_cleaned=(label == "cleaned"),
+                _settings_for_ocr_model(settings, model),
+                source_is_cleaned=source_is_cleaned,
             )
         except Exception as exc:
-            errors[label] = str(exc)
+            errors[candidate_label] = str(exc)
             return
 
-        candidates[label] = markdown
-        scores[label] = _score_ocr_markdown(markdown)
-
-    run_candidate("cleaned", cleaned_file_path)
-    cleaned_markdown = candidates.get("cleaned")
-    if cleaned_markdown is None:
-        suspicious_reasons.append("Cleaned OCR failed, so the pipeline tried the original input.")
-        run_candidate("original", original_file_path)
-    elif _cleaned_ocr_needs_comparison(cleaned_markdown):
-        suspicious_reasons.append(
-            "Cleaned OCR looked suspicious, so the pipeline checked the original input before choosing."
-        )
-        run_candidate("original", original_file_path)
-    else:
-        suspicious_reasons.append(
-            "Cleaned OCR looked usable, so the original watermarked input was not OCRed for this page."
+        candidate_records.append(
+            {
+                "source": source_label,
+                "normalized_source": "original" if source_label == "original" else "cleaned",
+                "model": model,
+                "label": candidate_label,
+                "markdown": markdown,
+                "score": _score_ocr_markdown(markdown),
+            }
         )
 
-    if not candidates:
+    def run_source_with_model(
+        source_label: str,
+        file_path: Path,
+        *,
+        source_is_cleaned: bool,
+        model: str,
+    ) -> None:
+        run_candidate(
+            source_label,
+            file_path,
+            source_is_cleaned=source_is_cleaned,
+            model=model,
+        )
+
+    def best_record(*sources: str) -> dict[str, object] | None:
+        source_set = set(sources)
+        source_records = [
+            record
+            for record in candidate_records
+            if str(record.get("normalized_source") or "") in source_set
+            or str(record.get("source") or "") in source_set
+        ]
+        if not source_records:
+            return None
+        return max(source_records, key=lambda record: float(record.get("score") or 0.0))
+
+    def source_error(source: str) -> str | None:
+        messages = [
+            message
+            for label, message in errors.items()
+            if label.startswith(f"{source}:")
+        ]
+        return " | ".join(messages) if messages else None
+
+    try:
+        primary_model = ocr_models[0] if ocr_models else settings.ocr_model
+        compare_models = tuple(model for model in ocr_models if model != primary_model)
+
+        run_source_with_model(
+            "cleaned",
+            cleaned_file_path,
+            source_is_cleaned=True,
+            model=primary_model,
+        )
+        cleaned_record = best_record("cleaned")
+        cleaned_markdown = (
+            str(cleaned_record.get("markdown") or "")
+            if cleaned_record is not None
+            else None
+        )
+        if (
+            page_number == 1
+            and cleaned_markdown is not None
+            and not _contains_latin_case_series(cleaned_markdown)
+        ):
+            run_source_with_model(
+                "original",
+                original_file_path,
+                source_is_cleaned=True,
+                model=primary_model,
+            )
+        cleaned_score = float(cleaned_record.get("score") or 0.0) if cleaned_record is not None else 0.0
+        cleaned_is_suspicious = cleaned_markdown is None or _cleaned_ocr_needs_comparison(cleaned_markdown)
+        should_try_compare_model = cleaned_markdown is not None and (
+            cleaned_is_suspicious or cleaned_score < 450
+        )
+        if should_try_compare_model:
+            for model in compare_models:
+                run_source_with_model(
+                    "cleaned",
+                    cleaned_file_path,
+                    source_is_cleaned=True,
+                    model=model,
+                )
+            cleaned_record = best_record("cleaned")
+            cleaned_markdown = (
+                str(cleaned_record.get("markdown") or "")
+                if cleaned_record is not None
+                else None
+            )
+            cleaned_score = float(cleaned_record.get("score") or 0.0) if cleaned_record is not None else 0.0
+            cleaned_is_suspicious = cleaned_markdown is None or _cleaned_ocr_needs_comparison(cleaned_markdown)
+
+        should_try_aggressive = cleaned_markdown is not None and (
+            cleaned_is_suspicious or cleaned_score < 450
+        )
+
+        if should_try_aggressive:
+            try:
+                aggressive_path = _build_aggressive_ocr_input(cleaned_file_path, page_number)
+            except Exception as exc:
+                errors["aggressive:preprocess"] = str(exc)
+            else:
+                temp_candidate_paths.append(aggressive_path)
+                run_source_with_model(
+                    "aggressive",
+                    aggressive_path,
+                    source_is_cleaned=True,
+                    model=primary_model,
+                )
+                if cleaned_is_suspicious:
+                    for model in compare_models:
+                        run_source_with_model(
+                            "aggressive",
+                            aggressive_path,
+                            source_is_cleaned=True,
+                            model=model,
+                        )
+                suspicious_reasons.append(
+                    "The pipeline tried an aggressive black/white OCR image because watermark cleanup was important for this page."
+                )
+
+        if cleaned_markdown is None:
+            suspicious_reasons.append("Cleaned OCR failed, so extra OCR candidates were skipped for this page.")
+        elif page_number == 1:
+            suspicious_reasons.append(
+                "The first page header is critical, so the pipeline also checked the original image."
+            )
+        elif _cleaned_ocr_needs_comparison(cleaned_markdown):
+            suspicious_reasons.append(
+                "Cleaned OCR looked suspicious, so the pipeline compared cleaned aggressive candidates only."
+            )
+        else:
+            suspicious_reasons.append(
+                "Cleaned OCR looked usable, so no original watermarked OCR was run for this page."
+            )
+    finally:
+        for temp_path in temp_candidate_paths:
+            temp_path.unlink(missing_ok=True)
+
+    if not candidate_records:
         raise RuntimeError(
-            f"Page {page_number} OCR failed for both cleaned and original inputs. "
+            f"Page {page_number} OCR failed for all OCR candidates. "
             + " | ".join(f"{label}: {message}" for label, message in errors.items())
         )
 
-    original_markdown = candidates.get("original")
-    cleaned_markdown = candidates.get("cleaned")
-    original_score = scores.get("original")
-    cleaned_score = scores.get("cleaned")
+    cleaned_record = best_record("cleaned")
+    original_record = best_record("original")
+    original_markdown = (
+        str(original_record.get("markdown") or "")
+        if original_record is not None
+        else None
+    )
+    cleaned_markdown = (
+        str(cleaned_record.get("markdown") or "")
+        if cleaned_record is not None
+        else None
+    )
+    original_score = (
+        float(original_record.get("score") or 0.0)
+        if original_record is not None
+        else None
+    )
+    cleaned_score = (
+        float(cleaned_record.get("score") or 0.0)
+        if cleaned_record is not None
+        else None
+    )
+
+    if len(ocr_models) > 1:
+        suspicious_reasons.append(
+            "The pipeline compared OCR models: "
+            + ", ".join(_short_model_name(model) for model in ocr_models)
+            + "."
+        )
 
     diff_similarity: float | None = None
-    if original_markdown and cleaned_markdown:
-        normalized_original = _normalize_text_for_similarity(original_markdown)
-        normalized_cleaned = _normalize_text_for_similarity(cleaned_markdown)
-        diff_similarity = SequenceMatcher(None, normalized_original, normalized_cleaned).ratio()
-
-        if diff_similarity < 0.86:
-            suspicious_reasons.append("Original OCR and cleaned OCR differ significantly on this page.")
-
-        original_blocks = _extract_candidate_blocks(original_markdown)
-        cleaned_blocks = _extract_candidate_blocks(cleaned_markdown)
-        if abs(len(original_blocks) - len(cleaned_blocks)) >= 2:
-            suspicious_reasons.append("Original and cleaned OCR produced a different number of text blocks.")
-
-        if original_score is not None and cleaned_score is not None:
-            if abs(original_score - cleaned_score) <= 120 and diff_similarity < 0.95:
-                suspicious_reasons.append("The source choice is close, so this page is worth double-checking.")
-    else:
-        suspicious_reasons.append("Only one OCR source succeeded, so this page may need a manual check.")
+    if cleaned_markdown is None:
+        suspicious_reasons.append("No cleaned OCR candidate succeeded, so this page may need a manual check.")
 
     if cleaned_markdown is not None:
-        cleaned_blocks = _extract_candidate_blocks(cleaned_markdown)
-        original_legal_signal_count = (
-            _count_signal_matches(original_markdown, LEGAL_OCR_SIGNALS)
-            if original_markdown is not None
-            else 0
-        )
-        cleaned_legal_signal_count = _count_signal_matches(cleaned_markdown, LEGAL_OCR_SIGNALS)
-        cleaned_is_weak = (
-            _cleaned_ocr_needs_comparison(cleaned_markdown)
-            or len(cleaned_blocks) <= 2
-        )
-        original_preserves_more_legal_text = original_legal_signal_count > cleaned_legal_signal_count
-        if (
-            cleaned_is_weak
-            and original_markdown is not None
-            and original_score is not None
-            and cleaned_score is not None
-            and original_score > cleaned_score + 80
-            and original_preserves_more_legal_text
-        ):
-            selected_source = "original"
-            suspicious_reasons.append(
-                "Cleaned OCR looked weak and original OCR preserved more legal text on this page."
-            )
-        elif (
-            original_markdown is not None
-            and original_score is not None
-            and cleaned_score is not None
-            and original_score > cleaned_score + 180
-            and original_preserves_more_legal_text
-        ):
-            selected_source = "original"
-            suspicious_reasons.append(
-                "Original OCR preserved more usable text than the cleaned comparison on this page."
-            )
+        selected_source = "cleaned"
+        if original_record is None:
+            suspicious_reasons.append("Cleaned OCR is the only OCR source used for this page.")
         else:
-            selected_source = "cleaned"
-            if original_markdown is not None:
-                suspicious_reasons.append(
-                    "Cleaned OCR is preferred as the primary review source when watermark removal succeeds."
-                )
+            suspicious_reasons.append("Cleaned OCR was selected after checking the original image.")
     else:
-        selected_source = max(candidates, key=lambda label: scores[label])
+        selected_record = max(candidate_records, key=lambda record: float(record.get("score") or 0.0))
+        selected_source = str(selected_record.get("normalized_source") or selected_record.get("source") or "cleaned")
 
-    selected_markdown = candidates[selected_source]
-    selected_score = scores[selected_source]
+    selected_record = cleaned_record
+    if (
+        page_number == 1
+        and original_record is not None
+        and _contains_latin_case_series(original_markdown)
+        and not _contains_latin_case_series(cleaned_markdown)
+    ):
+        selected_record = original_record
+        selected_source = "original"
+        suspicious_reasons.append(
+            "The original first-page OCR kept a Latin case-number series that cleaned OCR missed."
+        )
+    if selected_record is None:
+        selected_record = max(candidate_records, key=lambda record: float(record.get("score") or 0.0))
+        selected_source = str(selected_record.get("normalized_source") or selected_record.get("source") or "cleaned")
+
+    selected_markdown = str(selected_record.get("markdown") or "")
+    selected_score = float(selected_record.get("score") or 0.0)
+    selected_ocr_model = str(selected_record.get("model") or settings.ocr_model)
+    selected_candidate_source = str(selected_record.get("source") or selected_source)
+    if selected_candidate_source == "aggressive":
+        suspicious_reasons.append("The selected cleaned OCR text came from the aggressive black/white image candidate.")
 
     selected_blocks = _extract_candidate_blocks(selected_markdown)
     if len(selected_blocks) <= 3:
@@ -1874,22 +2299,32 @@ def compare_ocr_page_sources(
     if _normalized_text_length(selected_markdown) < 120:
         suspicious_reasons.append("The selected OCR output is shorter than expected.")
 
-    if selected_source == "original" and cleaned_markdown and original_score is not None and cleaned_score is not None:
-        suspicious_reasons.append("Original OCR scored better than cleaned OCR on this page.")
-    if selected_source == "cleaned" and original_markdown and original_score is not None and cleaned_score is not None:
-        suspicious_reasons.append("Cleaned OCR scored better than original OCR on this page.")
-
     return {
         "selected_source": selected_source,
         "selected_markdown": selected_markdown,
         "selected_score": selected_score,
+        "selected_ocr_model": selected_ocr_model,
+        "selected_candidate_source": selected_candidate_source,
         "original_markdown": original_markdown,
         "cleaned_markdown": cleaned_markdown,
         "original_score": original_score,
         "cleaned_score": cleaned_score,
-        "original_error": errors.get("original"),
-        "cleaned_error": errors.get("cleaned"),
+        "original_error": None,
+        "cleaned_error": source_error("cleaned") or source_error("aggressive"),
         "diff_similarity": diff_similarity,
+        "candidate_scores": [
+            {
+                "label": str(record.get("label") or ""),
+                "source": str(record.get("source") or ""),
+                "model": str(record.get("model") or ""),
+                "score": float(record.get("score") or 0.0),
+            }
+            for record in sorted(
+                candidate_records,
+                key=lambda record: float(record.get("score") or 0.0),
+                reverse=True,
+            )
+        ],
         "suspicious_reasons": suspicious_reasons,
     }
 

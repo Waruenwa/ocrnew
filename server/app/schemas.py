@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +47,9 @@ class ImportPageAsset(BaseModel):
     page_number: int
     original_preview_path: str
     cleaned_preview_path: str
+    watermark_detected: bool | None = None
+    watermark_score: float | None = None
+    cleaning_mode: str | None = None
     markdown: str | None = None
     raw_markdown: str | None = None
     corrected_markdown: str | None = None
@@ -53,6 +57,9 @@ class ImportPageAsset(BaseModel):
     cleaned_markdown: str | None = None
     selected_markdown_source: str | None = None
     selected_markdown_score: float | None = None
+    selected_ocr_model: str | None = None
+    selected_candidate_source: str | None = None
+    ocr_candidate_scores: list[dict[str, Any]] = Field(default_factory=list)
     original_markdown_score: float | None = None
     cleaned_markdown_score: float | None = None
     correction_model: str | None = None
@@ -87,6 +94,7 @@ class ImportRecord(BaseModel):
     correction_model: str | None = None
     ocr_error_message: str | None = None
     ocr_completed_at: str | None = None
+    review_data: dict[str, Any] | None = None
     pages: list[ImportPageAsset] = Field(default_factory=list)
 
 
@@ -120,7 +128,10 @@ class AppConfigResponse(BaseModel):
     imports_source_dir: str
     ocr_ready: bool
     extraction_ready: bool
+    vision_ready: bool
     ocr_model: str
+    ocr_compare_models: list[str] = Field(default_factory=list)
+    vision_model: str
     max_upload_mb: int
     text_model: str
 

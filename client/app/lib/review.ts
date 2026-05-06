@@ -20,10 +20,66 @@ export type TextSegment = {
   source_row_index?: number | null;
 };
 
+export type ReviewFieldKey =
+  | "caseRedNo"
+  | "caseBlackNo"
+  | "courtName"
+  | "payAmount"
+  | "interestRate"
+  | "principalAmount"
+  | "filingDate"
+  | "attorneyFee"
+  | "tableName"
+  | "personId"
+  | "houseCode"
+  | "personName"
+  | "gender"
+  | "nationality"
+  | "birthDate"
+  | "age"
+  | "status"
+  | "motherName"
+  | "motherId"
+  | "motherNationality"
+  | "fatherName"
+  | "fatherId"
+  | "fatherNationality"
+  | "address"
+  | "moveInDate"
+  | "remark"
+  | "updateDate";
+
+export type ReviewField = {
+  value: string | null;
+  pageNumber: number | null;
+  bbox: [number, number, number, number] | null;
+  source?: string | null;
+};
+
+export type ReviewKeywordHit = {
+  id: string;
+  pageNumber: number;
+  text: string;
+  displayText?: string | null;
+  bbox: [number, number, number, number] | null;
+};
+
+export type ReviewData = {
+  version: number;
+  documentType?: string | null;
+  visionModel?: string | null;
+  visionErrors?: string[];
+  fields: Partial<Record<ReviewFieldKey, ReviewField>>;
+  keywordHits: ReviewKeywordHit[];
+};
+
 export type ImportPageAsset = {
   page_number: number;
   original_preview_path: string;
   cleaned_preview_path: string;
+  watermark_detected?: boolean | null;
+  watermark_score?: number | null;
+  cleaning_mode?: string | null;
   markdown: string | null;
   raw_markdown: string | null;
   corrected_markdown: string | null;
@@ -31,6 +87,14 @@ export type ImportPageAsset = {
   cleaned_markdown: string | null;
   selected_markdown_source: "original" | "cleaned" | "manual" | null;
   selected_markdown_score: number | null;
+  selected_ocr_model: string | null;
+  selected_candidate_source: string | null;
+  ocr_candidate_scores: Array<{
+    label: string;
+    source: string;
+    model: string;
+    score: number;
+  }>;
   original_markdown_score: number | null;
   cleaned_markdown_score: number | null;
   correction_model: string | null;
@@ -65,6 +129,7 @@ export type ImportRecord = {
   correction_model: string | null;
   ocr_error_message: string | null;
   ocr_completed_at: string | null;
+  review_data?: ReviewData | null;
   pages: ImportPageAsset[];
 };
 
@@ -72,7 +137,10 @@ export type AppConfig = {
   imports_source_dir: string;
   ocr_ready: boolean;
   extraction_ready: boolean;
+  vision_ready?: boolean;
   ocr_model: string;
+  ocr_compare_models?: string[];
+  vision_model?: string;
   max_upload_mb: number;
   text_model: string;
 };

@@ -1,0 +1,38 @@
+INFO:     Will watch for changes in these directories: ['C:\\Users\\waruen.w\\Desktop\\ocrnew\\server']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [21344] using WatchFiles
+INFO:     Started server process [12304]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\import_pipeline.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [12304]
+WARNING:  WatchFiles detected changes in 'app\import_pipeline.py'. Reloading...
+INFO:     Started server process [4972]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [4972]
+INFO:     Started server process [16304]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app\tr_review.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [16304]
+WARNING:  WatchFiles detected changes in 'app\tr_review.py'. Reloading...
+INFO:     Started server process [20844]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [20844]
+INFO:     Started server process [18924]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

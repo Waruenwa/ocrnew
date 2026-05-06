@@ -18,10 +18,16 @@ JOBS_STORAGE_DIR = STORAGE_DIR / "jobs"
 JOBS_ORIGINAL_DIR = JOBS_STORAGE_DIR / "original"
 JOBS_DERIVED_DIR = JOBS_STORAGE_DIR / "derived"
 DEFAULT_CORS_ORIGINS = ("http://localhost:3000",)
-DEFAULT_OCR_MODEL = "scb10x/typhoon-ocr-7b:latest"
-DEFAULT_OCR_TARGET_IMAGE_DIM = 900
-DEFAULT_OCR_TIMEOUT_SECONDS = 150
-DEFAULT_OCR_NUM_PREDICT = 1800
+DEFAULT_OCR_MODEL = "scb10x/typhoon-ocr1.5-3b:latest"
+DEFAULT_OCR_TARGET_IMAGE_DIM = 1100
+DEFAULT_OCR_TIMEOUT_SECONDS = 120
+DEFAULT_OCR_NUM_PREDICT = 2200
+DEFAULT_VISION_BASE_URL = ""
+DEFAULT_VISION_MODEL = ""
+DEFAULT_VISION_TIMEOUT_SECONDS = 45
+DEFAULT_VISION_NUM_PREDICT = 600
+DEFAULT_ANCHOR_PROVIDER = "auto"
+DEFAULT_ANCHOR_LANGUAGE = "th"
 
 
 def _parse_origins(raw_value: str | None) -> tuple[str, ...]:
@@ -37,6 +43,13 @@ def _get_first_env(*names: str) -> str | None:
         if value:
             return value
     return None
+
+
+def _parse_csv(raw_value: str | None) -> tuple[str, ...]:
+    if not raw_value:
+        return ()
+    values = tuple(value.strip() for value in raw_value.split(",") if value.strip())
+    return values
 
 
 def _looks_local_url(raw_url: str | None) -> bool:
@@ -90,12 +103,20 @@ class Settings:
     ocr_base_url: str
     ocr_api_key: str | None
     ocr_model: str
+    ocr_compare_models: tuple[str, ...]
     text_base_url: str
     text_api_key: str | None
     text_model: str
     ocr_target_image_dim: int
     ocr_timeout_seconds: int
     ocr_num_predict: int
+    vision_base_url: str
+    vision_api_key: str | None
+    vision_model: str
+    vision_timeout_seconds: int
+    vision_num_predict: int
+    anchor_provider: str
+    anchor_language: str
     max_upload_mb: int
 
     @property
@@ -105,6 +126,11 @@ class Settings:
     @property
     def extraction_ready(self) -> bool:
         return _endpoint_ready(self.text_base_url, self.text_model, self.text_api_key)
+
+    @property
+    def vision_ready(self) -> bool:
+        # Vision/Qwen is intentionally disabled in the current OCR-only baseline.
+        return False
 
     @property
     def text_client_api_key(self) -> str:
@@ -144,6 +170,7 @@ def load_settings() -> Settings:
         ocr_base_url=_get_first_env("OCR_BASE_URL", "TYPHOON_BASE_URL") or "https://api.opentyphoon.ai/v1",
         ocr_api_key=_get_first_env("OCR_API_KEY", "TYPHOON_OCR_API_KEY", "TYPHOON_API_KEY"),
         ocr_model=os.getenv("OCR_MODEL") or DEFAULT_OCR_MODEL,
+        ocr_compare_models=_parse_csv(os.getenv("OCR_COMPARE_MODELS")),
         text_base_url=_get_first_env("TEXT_BASE_URL", "TYPHOON_TEXT_BASE_URL", "TYPHOON_BASE_URL")
         or "https://api.opentyphoon.ai/v1",
         text_api_key=_get_first_env("TEXT_API_KEY", "TYPHOON_API_KEY", "TYPHOON_OCR_API_KEY"),
@@ -151,7 +178,17 @@ def load_settings() -> Settings:
         ocr_target_image_dim=int(os.getenv("OCR_TARGET_IMAGE_DIM", str(DEFAULT_OCR_TARGET_IMAGE_DIM))),
         ocr_timeout_seconds=int(os.getenv("OCR_TIMEOUT_SECONDS", str(DEFAULT_OCR_TIMEOUT_SECONDS))),
         ocr_num_predict=int(os.getenv("OCR_NUM_PREDICT", str(DEFAULT_OCR_NUM_PREDICT))),
-        max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "25")),
+        vision_base_url=_get_first_env("VISION_BASE_URL", "VLM_BASE_URL")
+        or DEFAULT_VISION_BASE_URL,
+        vision_api_key=_get_first_env("VISION_API_KEY", "VLM_API_KEY"),
+        vision_model=_get_first_env("VISION_MODEL", "VLM_MODEL") or DEFAULT_VISION_MODEL,
+        vision_timeout_seconds=int(
+            os.getenv("VISION_TIMEOUT_SECONDS", str(DEFAULT_VISION_TIMEOUT_SECONDS))
+        ),
+        vision_num_predict=int(os.getenv("VISION_NUM_PREDICT", str(DEFAULT_VISION_NUM_PREDICT))),
+        anchor_provider=os.getenv("ANCHOR_PROVIDER", DEFAULT_ANCHOR_PROVIDER),
+        anchor_language=os.getenv("ANCHOR_LANGUAGE", DEFAULT_ANCHOR_LANGUAGE),
+        max_upload_mb=int(os.getenv("MAX_UPLOAD_MB", "50")),
     )
 
 

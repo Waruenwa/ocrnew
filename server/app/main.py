@@ -210,7 +210,10 @@ async def config() -> AppConfigResponse:
         imports_source_dir=str(settings.imports_source_dir),
         ocr_ready=settings.ocr_ready,
         extraction_ready=settings.extraction_ready,
+        vision_ready=settings.vision_ready,
         ocr_model=settings.ocr_model,
+        ocr_compare_models=list(settings.ocr_compare_models),
+        vision_model=settings.vision_model,
         max_upload_mb=settings.max_upload_mb,
         text_model=settings.text_model,
     )

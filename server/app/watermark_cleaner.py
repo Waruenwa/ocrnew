@@ -10,29 +10,16 @@ import numpy as np
 from PIL import Image
 
 
-DEFAULT_INPUT = Path("01.pdf")
-DEFAULT_OUTPUT = Path("01_no_watermark.pdf")
+# DEFAULT_INPUT = Path("01.pdf")
+# DEFAULT_OUTPUT = Path("01_no_watermark.pdf")
 WATERMARK_ANGLE = -32
-DEFAULT_RENDER_DPI = 260
-DETECTION_THRESHOLD = 248
-LIGHT_STROKE_MIN_VALUE = 155
-LIGHT_COMPONENT_MIN_MEAN = 188
-WHITE_CLIP_THRESHOLD = 235
-BACKGROUND_CLIP_THRESHOLD = 248
-OCR_TEXT_KEEP_THRESHOLD = 230
-OCR_TEXT_DARKEN_SCALE = 0.80
-OCR_TEXT_DARKEN_OFFSET = 6.0
-OCR_SPECK_MIN_AREA = 2
-TEXT_PROTECT_THRESHOLD = 190
-TEXT_STRONG_THRESHOLD = 165
-MASK_SOFTEN_SIGMA = 2.2
-MASK_EXPAND_SIGMA = 7.0
-GENERAL_WHITEN_STRENGTH = 1.0
-PROTECTED_WHITEN_STRENGTH = 0.34
-EXTRA_BACKGROUND_WHITEN_STRENGTH = 0.62
-STRONG_TEXT_MAX_LIFT = 6.0
-RESTORED_MASK_THRESHOLD = 8
-HARD_WATERMARK_MIN_VALUE = 168
+DEFAULT_RENDER_DPI = 200
+DETECTION_THRESHOLD = 250
+LIGHT_COMPONENT_MIN_MEAN = 235
+WHITE_CLIP_THRESHOLD = 232
+DENSE_PAGE_PIXEL_RATIO = 0.035
+DENSE_PAGE_BINARY_THRESHOLD = 200
+WATERMARK_HEAVY_PAGE_RATIO = 0.04
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,91 +50,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def clean_page_image(page: fitz.Page, dpi: int) -> bytes:
+def clean_image_array(image_array: np.ndarray) -> np.ndarray:
+    watermark_mask = build_watermark_mask(image_array)
+    cleaned = image_array.copy()
+    cleaned[watermark_mask > 0] = 255
+    cleaned[cleaned > WHITE_CLIP_THRESHOLD] = 255
+
+    # Dense text pages look cleaner as binary output, while sparse stamp/signature pages
+    # preserve detail better if we keep them in grayscale after whitening the watermark.
+    # Some sparse pages still carry a lot of watermark coverage; those pages need the
+    # binary fallback as well or the remaining gray watermark edges stay visible.
+    dark_pixel_ratio = float((cleaned < 220).mean())
+    watermark_pixel_ratio = float((watermark_mask > 0).mean())
+    if dark_pixel_ratio >= DENSE_PAGE_PIXEL_RATIO or watermark_pixel_ratio >= WATERMARK_HEAVY_PAGE_RATIO:
+        blurred = cv2.medianBlur(cleaned, 3)
+        output_array = np.where(blurred < DENSE_PAGE_BINARY_THRESHOLD, 0, 255).astype("uint8")
+    else:
+        output_array = cleaned
+
+    return output_array.astype("uint8")
+
+
+def clean_image_array_soft(image_array: np.ndarray) -> np.ndarray:
+    watermark_mask = build_watermark_mask(image_array)
+    cleaned = image_array.copy()
+    cleaned[watermark_mask > 0] = 255
+    cleaned[cleaned > WHITE_CLIP_THRESHOLD + 10] = 255
+    return cleaned.astype("uint8")
+
+
+def clean_pil_image(image: Image.Image) -> Image.Image:
+    image_array = np.array(image.convert("L"))
+    return Image.fromarray(clean_image_array(image_array))
+
+
+def clean_pil_image_soft(image: Image.Image) -> Image.Image:
+    image_array = np.array(image.convert("L"))
+    return Image.fromarray(clean_image_array_soft(image_array))
+
+
+def clean_page_to_image(page: fitz.Page, dpi: int = DEFAULT_RENDER_DPI) -> Image.Image:
     pixmap = page.get_pixmap(dpi=dpi, alpha=False)
     image = Image.open(io.BytesIO(pixmap.tobytes("png"))).convert("L")
-    image_array = np.array(image)
+    return clean_pil_image(image)
 
-    watermark_mask = build_watermark_mask(image_array)
-    output_array = apply_soft_watermark_cleanup(image_array, watermark_mask)
 
+def clean_page_image(page: fitz.Page, dpi: int) -> bytes:
+    output_image = clean_page_to_image(page, dpi=dpi)
     output_buffer = io.BytesIO()
-    Image.fromarray(output_array).save(output_buffer, format="PNG", optimize=True)
+    output_image.save(output_buffer, format="PNG", optimize=True)
     return output_buffer.getvalue()
-
-
-def apply_soft_watermark_cleanup(
-    image_array: np.ndarray,
-    watermark_mask: np.ndarray,
-) -> np.ndarray:
-    base = image_array.astype("float32")
-    softened_mask = cv2.GaussianBlur(watermark_mask, (0, 0), MASK_SOFTEN_SIGMA).astype("float32") / 255.0
-    expanded_mask = cv2.dilate(
-        watermark_mask,
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 7)),
-        iterations=2,
-    )
-    expanded_mask = cv2.GaussianBlur(expanded_mask, (0, 0), MASK_EXPAND_SIGMA).astype("float32") / 255.0
-
-    protected_text = np.where(image_array < TEXT_PROTECT_THRESHOLD, 255, 0).astype("uint8")
-    strong_text = np.where(image_array < TEXT_STRONG_THRESHOLD, 255, 0).astype("uint8")
-    protected_text = cv2.dilate(
-        protected_text,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)),
-        iterations=1,
-    )
-    strong_text = cv2.dilate(
-        strong_text,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)),
-        iterations=1,
-    )
-
-    whitening_strength = np.full(base.shape, GENERAL_WHITEN_STRENGTH, dtype="float32")
-    whitening_strength = np.where(protected_text > 0, PROTECTED_WHITEN_STRENGTH, whitening_strength)
-
-    lifted = base + (softened_mask * whitening_strength * (255.0 - base))
-    extra_background_lift = expanded_mask * EXTRA_BACKGROUND_WHITEN_STRENGTH * (255.0 - base)
-    lifted = np.where(protected_text > 0, lifted, lifted + extra_background_lift)
-
-    hard_watermark_pixels = (
-        ((watermark_mask > 0) | (expanded_mask > 0.28))
-        & (image_array >= HARD_WATERMARK_MIN_VALUE)
-        & (strong_text == 0)
-    )
-    lifted = np.where(hard_watermark_pixels, 255.0, lifted)
-    lifted = np.where(strong_text > 0, np.minimum(lifted, base + STRONG_TEXT_MAX_LIFT), lifted)
-    lifted = np.clip(lifted, 0, 255)
-
-    watermark_clip_pixels = (
-        ((watermark_mask > 0) | (expanded_mask > 0.18))
-        & (lifted > WHITE_CLIP_THRESHOLD)
-        & (strong_text == 0)
-    )
-    lifted = np.where(watermark_clip_pixels, 255.0, lifted)
-    lifted = np.where(lifted > BACKGROUND_CLIP_THRESHOLD, 255.0, lifted)
-
-    return apply_ocr_contrast_cleanup(lifted.astype("uint8"))
-
-
-def apply_ocr_contrast_cleanup(image_array: np.ndarray) -> np.ndarray:
-    text_pixels = image_array < OCR_TEXT_KEEP_THRESHOLD
-    output = np.full(image_array.shape, 255, dtype="uint8")
-    darkened_text = (
-        (image_array.astype("float32") * OCR_TEXT_DARKEN_SCALE)
-        - OCR_TEXT_DARKEN_OFFSET
-    )
-    output[text_pixels] = np.clip(darkened_text, 0, 255).astype("uint8")[text_pixels]
-
-    ink = np.where(output < 245, 255, 0).astype("uint8")
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
-    cleaned_ink = np.zeros_like(ink)
-    for label in range(1, num_labels):
-        area = stats[label, cv2.CC_STAT_AREA]
-        if area < OCR_SPECK_MIN_AREA:
-            continue
-        cleaned_ink[labels == label] = 255
-
-    return np.where(cleaned_ink > 0, output, 255).astype("uint8")
 
 
 def build_watermark_mask(image_array: np.ndarray) -> np.ndarray:
@@ -163,58 +115,43 @@ def build_watermark_mask(image_array: np.ndarray) -> np.ndarray:
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=255,
     )
-    light_strokes = np.where(
-        (rotated < DETECTION_THRESHOLD)
-        & (rotated >= LIGHT_STROKE_MIN_VALUE),
-        255,
-        0,
-    ).astype("uint8")
-    dark_strokes = np.where(rotated < TEXT_STRONG_THRESHOLD, 255, 0).astype("uint8")
+    binary = np.where(rotated < DETECTION_THRESHOLD, 255, 0).astype("uint8")
 
     # After rotation, watermark words become roughly horizontal. A horizontal dilation
     # turns each watermark phrase into a compact component we can filter by shape.
     connected = cv2.dilate(
-        light_strokes,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (47, 7)),
+        binary,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (25, 3)),
         iterations=1,
     )
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(connected, connectivity=8)
-    rotated_mask = np.zeros_like(light_strokes)
+    rotated_mask = np.zeros_like(binary)
 
     for label in range(1, num_labels):
         _, _, component_width, component_height, area = stats[label]
-        if area < 140 or area > 42000 or component_height < 8 or component_height > 96:
+        if area < 400 or area > 12000 or component_height < 16 or component_height > 60:
             continue
 
         aspect_ratio = component_width / max(component_height, 1)
-        if aspect_ratio < 2.2:
+        if aspect_ratio < 4.0:
             continue
 
         component_pixels = labels == label
-        stroke_pixels = (light_strokes > 0) & component_pixels
-        stroke_count = int(stroke_pixels.sum())
-        if stroke_count < 20:
-            continue
-
-        stroke_mean = float(rotated[stroke_pixels].mean())
-        if stroke_mean < LIGHT_COMPONENT_MIN_MEAN:
-            continue
-
-        dark_ratio = float(((dark_strokes > 0) & component_pixels).sum()) / max(area, 1)
-        if dark_ratio > 0.035:
+        mean_value = float(rotated[component_pixels].mean())
+        if mean_value < LIGHT_COMPONENT_MIN_MEAN:
             continue
 
         rotated_mask[component_pixels] = 255
 
     rotated_mask = cv2.erode(
         rotated_mask,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3)),
+        cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3)),
         iterations=1,
     )
     rotated_mask = cv2.dilate(
         rotated_mask,
-        cv2.getStructuringElement(cv2.MORPH_RECT, (27, 7)),
-        iterations=2,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (11, 3)),
+        iterations=1,
     )
 
     reverse_rotate_matrix = cv2.getRotationMatrix2D(center, -WATERMARK_ANGLE, 1.0)
@@ -226,7 +163,7 @@ def build_watermark_mask(image_array: np.ndarray) -> np.ndarray:
         borderMode=cv2.BORDER_CONSTANT,
         borderValue=0,
     )
-    return np.where(restored_mask > RESTORED_MASK_THRESHOLD, 255, 0).astype("uint8")
+    return np.where(restored_mask > 32, 255, 0).astype("uint8")
 
 
 def remove_watermark(input_pdf: Path, output_pdf: Path, dpi: int) -> None:

@@ -9,6 +9,11 @@ import { FiArrowLeft } from 'react-icons/fi';
 import { API_BASE_URL } from '../lib/review';
 import { DOCUMENT_CATEGORIES } from '../lib/document-categories';
 
+const MAX_UPLOAD_FILES = 10;
+const MAX_UPLOAD_MB = 50;
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const ACCEPTED_EXTENSIONS = new Set(['.pdf', '.png', '.jpg', '.jpeg']);
+
 const shellStyle = {
   maxWidth: 1000,
   margin: '0 auto',
@@ -32,7 +37,7 @@ const uploadPanelStyle = {
 
 export default function UploadFilePage() {
   const router = useRouter();
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [selectedDocumentCategory, setSelectedDocumentCategory] = useState<string>(
     DOCUMENT_CATEGORIES[0].value,
   );
@@ -42,11 +47,51 @@ export default function UploadFilePage() {
     text: string;
   } | null>(null);
 
-  async function handleUpload() {
-    if (!selectedFile) {
+  function validateFiles(files: File[]): string | null {
+    if (files.length === 0) {
+      return 'Please select at least one file before uploading.';
+    }
+    if (files.length > MAX_UPLOAD_FILES) {
+      return `Please select no more than ${MAX_UPLOAD_FILES} files.`;
+    }
+
+    for (const file of files) {
+      const extension = file.name
+        .slice(file.name.lastIndexOf('.'))
+        .toLowerCase();
+      if (!ACCEPTED_EXTENSIONS.has(extension)) {
+        return `Unsupported file type: ${file.name}`;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        return `${file.name} is larger than ${MAX_UPLOAD_MB} MB.`;
+      }
+    }
+
+    return null;
+  }
+
+  function handleFileSelection(files: FileList | null) {
+    const nextFiles = Array.from(files ?? []);
+    const validationError = validateFiles(nextFiles);
+    if (validationError) {
+      setSelectedFiles([]);
       setUploadMessage({
         type: 'error',
-        text: 'Please select a file before uploading.',
+        text: validationError,
+      });
+      return;
+    }
+
+    setSelectedFiles(nextFiles);
+    setUploadMessage(null);
+  }
+
+  async function handleUpload() {
+    const validationError = validateFiles(selectedFiles);
+    if (validationError) {
+      setUploadMessage({
+        type: 'error',
+        text: validationError,
       });
       return;
     }
@@ -55,19 +100,27 @@ export default function UploadFilePage() {
     setIsUploading(true);
 
     try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      formData.append('document_category', selectedDocumentCategory);
+      for (let index = 0; index < selectedFiles.length; index += 1) {
+        const file = selectedFiles[index];
+        setUploadMessage({
+          type: 'success',
+          text: `Uploading ${index + 1}/${selectedFiles.length}: ${file.name}`,
+        });
 
-      const response = await fetch(`${API_BASE_URL}/api/imports/upload`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as {
-          detail?: string;
-        } | null;
-        throw new Error(payload?.detail || 'Unable to upload this file.');
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('document_category', selectedDocumentCategory);
+
+        const response = await fetch(`${API_BASE_URL}/api/imports/upload`, {
+          method: 'POST',
+          body: formData,
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as {
+            detail?: string;
+          } | null;
+          throw new Error(payload?.detail || `Unable to upload ${file.name}.`);
+        }
       }
 
       router.push('/');
@@ -153,19 +206,41 @@ export default function UploadFilePage() {
                   }}
                 >
                   The system stores source files in `original` and creates OCR assets
-                  in `derived`.
+                  in `derived`. Select up to {MAX_UPLOAD_FILES} files, {MAX_UPLOAD_MB} MB each.
                 </Typography.Text>
                 <input
                   accept=".pdf,.png,.jpg,.jpeg"
                   onChange={(event) => {
-                    setSelectedFile(event.target.files?.[0] ?? null);
+                    handleFileSelection(event.target.files);
                   }}
                   style={{
                     maxWidth: 360,
                     color: '#241d17',
                   }}
+                  multiple
                   type="file"
                 />
+                {selectedFiles.length > 0 ? (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 4,
+                      maxWidth: 520,
+                    }}
+                  >
+                    {selectedFiles.map((file) => (
+                      <Typography.Text
+                        key={`${file.name}-${file.size}-${file.lastModified}`}
+                        style={{
+                          color: '#6a5a45',
+                          fontSize: '0.88rem',
+                        }}
+                      >
+                        {file.name} ({(file.size / (1024 * 1024)).toFixed(1)} MB)
+                      </Typography.Text>
+                    ))}
+                  </div>
+                ) : null}
                 <select
                   value={selectedDocumentCategory}
                   onChange={(event) => {
@@ -190,7 +265,7 @@ export default function UploadFilePage() {
               </div>
 
               <Button
-                disabled={!selectedFile}
+                disabled={selectedFiles.length === 0}
                 loading={isUploading}
                 onClick={() => void handleUpload()}
                 size="large"
@@ -204,7 +279,7 @@ export default function UploadFilePage() {
                   boxShadow: 'none',
                 }}
               >
-                Upload document
+                Upload {selectedFiles.length > 1 ? 'documents' : 'document'}
               </Button>
             </div>
           </div>
