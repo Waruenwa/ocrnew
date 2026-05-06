@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Button, Card, ConfigProvider, Spin, Statistic, Typography } from "antd";
 import { FiLogOut, FiShield, FiUserCheck } from "react-icons/fi";
@@ -23,6 +24,7 @@ type ProtectedRolePageProps = {
     label: string;
     value: number | string;
   }>;
+  children?: ReactNode;
 };
 
 export function ProtectedRolePage({
@@ -30,6 +32,7 @@ export function ProtectedRolePage({
   title,
   eyebrow,
   stats,
+  children,
 }: ProtectedRolePageProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isChecking, setIsChecking] = useState(true);
@@ -119,19 +122,21 @@ export function ProtectedRolePage({
           ))}
         </section>
 
-        <section className="rolePlaceholder">
-          <div className="rolePlaceholderIcon">
-            {allowedRole === "manager" ? <FiShield /> : <FiUserCheck />}
-          </div>
-          <div>
-            <Title level={3} style={{ margin: 0 }}>
-              Phase 1 Auth + Roles
-            </Title>
-            <Text style={{ color: "#64748b" }}>
-              Dashboard workflow modules will be added in later phases.
-            </Text>
-          </div>
-        </section>
+        {children ?? (
+          <section className="rolePlaceholder">
+            <div className="rolePlaceholderIcon">
+              {allowedRole === "manager" ? <FiShield /> : <FiUserCheck />}
+            </div>
+            <div>
+              <Title level={3} style={{ margin: 0 }}>
+                Phase 1 Auth + Roles
+              </Title>
+              <Text style={{ color: "#64748b" }}>
+                Dashboard workflow modules will be added in later phases.
+              </Text>
+            </div>
+          </section>
+        )}
       </main>
     </ConfigProvider>
   );

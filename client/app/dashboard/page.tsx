@@ -42,6 +42,7 @@ import {
 import {
   formatDocumentCategoryLabel,
 } from '../lib/document-categories';
+import { logout } from '../lib/auth';
 
 const { Text, Title } = Typography;
 
@@ -57,8 +58,8 @@ export default function Dashboard() {
     setUsername(localStorage.getItem('username') || '');
   }, []);
 
-  const handleLogout = () => {
-    localStorage.removeItem('username');
+  const handleLogout = async () => {
+    await logout();
     router.push('/');
   };
 

@@ -87,24 +87,6 @@ function getStoredToken() {
   return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
 }
 
-function getStoredUser() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const rawUser = window.localStorage.getItem(AUTH_USER_STORAGE_KEY);
-  if (!rawUser) {
-    return null;
-  }
-
-  try {
-    return normalizeUser(JSON.parse(rawUser) as Record<string, unknown>);
-  } catch {
-    clearStoredAuth();
-    return null;
-  }
-}
-
 function storeAuthPayload(payload: Record<string, unknown>, user: AuthUser) {
   if (typeof window === "undefined") {
     return;
@@ -175,8 +157,6 @@ export async function logout() {
 }
 
 export async function getCurrentUser() {
-  const storedUser = getStoredUser();
-
   let response: Response;
   try {
     response = await fetch(`${AUTH_API_BASE_URL}/getprofile`, {
@@ -185,7 +165,8 @@ export async function getCurrentUser() {
       headers: getAuthHeaders(),
     });
   } catch {
-    return storedUser;
+    clearStoredAuth();
+    return null;
   }
 
   if (response.status === 401) {
@@ -194,7 +175,8 @@ export async function getCurrentUser() {
   }
 
   if (response.status === 404) {
-    return storedUser;
+    clearStoredAuth();
+    return null;
   }
 
   if (!response.ok) {

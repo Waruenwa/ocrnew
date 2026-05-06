@@ -109,6 +109,102 @@ button {
   background: #ecfdf5;
 }
 
+.roleActionGrid,
+.roleUploadLayout {
+  display: grid;
+  gap: 16px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.roleActionCard,
+.roleUploadCard {
+  border-radius: 8px;
+}
+
+.roleActionCard .ant-card-body {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+}
+
+.roleActionCopy {
+  display: grid;
+  gap: 6px;
+}
+
+.roleUploadHeader,
+.roleUploadSection,
+.roleSelectedFilesHeader,
+.roleUploadActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.roleUploadSection,
+.roleSelectedFiles {
+  padding: 18px 0;
+  border-top: 1px solid #e2e8f0;
+}
+
+.roleFilePicker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 16px;
+  color: #136360;
+  font-weight: 700;
+  border: 1px solid #b7d7d3;
+  border-radius: 8px;
+  background: #f0fdfa;
+  cursor: pointer;
+}
+
+.roleFilePicker input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.roleEmptyFiles {
+  margin-top: 14px;
+  padding: 18px;
+  color: #64748b;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.roleFileList {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.roleFileList li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.roleFileList span {
+  overflow-wrap: anywhere;
+}
+
 .shell {
   max-width: 1540px;
   margin: 0 auto;

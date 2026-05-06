@@ -109,7 +109,7 @@ export function LoginForm() {
           {errorMessage && (
             <Alert
               type="error"
-              message={errorMessage}
+              title={errorMessage}
               showIcon
               style={{ marginBottom: 24, borderRadius: 8 }}
             />
