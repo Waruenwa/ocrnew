@@ -22,7 +22,7 @@ from pypdf import PdfReader
 from typhoon_ocr import ocr_document
 from typhoon_ocr.ocr_utils import prepare_ocr_messages, render_pdf_to_base64png
 
-from app.config import Settings
+from app.core.config import Settings
 
 
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}

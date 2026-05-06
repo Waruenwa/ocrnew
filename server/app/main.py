@@ -12,8 +12,8 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from app.config import BASE_DIR, ensure_data_dirs, load_settings
-from app.database import init_db
+from app.core.config import BASE_DIR, ensure_data_dirs, load_settings
+from app.core.database import init_db
 from app.import_pipeline import (
     create_import_from_uploaded_file,
     get_import,

@@ -43,6 +43,72 @@ button {
   cursor: pointer;
 }
 
+.roleShell {
+  min-height: 100vh;
+  padding: 32px;
+  background: linear-gradient(135deg, #eef2f7 0%, #f8fafc 100%);
+}
+
+.roleShellCentered {
+  display: grid;
+  place-items: center;
+}
+
+.roleHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  max-width: 1180px;
+  margin: 0 auto 24px;
+  padding: 28px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.roleEyebrow {
+  font-weight: 700;
+  color: #136360;
+  text-transform: uppercase;
+}
+
+.roleStats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  max-width: 1180px;
+  margin: 0 auto 24px;
+}
+
+.roleStatCard {
+  border-radius: 8px;
+}
+
+.rolePlaceholder {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 28px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.rolePlaceholderIcon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  color: #136360;
+  font-size: 26px;
+  border-radius: 8px;
+  background: #ecfdf5;
+}
+
 .shell {
   max-width: 1540px;
   margin: 0 auto;

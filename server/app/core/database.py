@@ -5,7 +5,7 @@ from functools import lru_cache
 from pymongo import MongoClient
 from pymongo.collection import Collection
 
-from app.config import load_settings
+from app.core.config import load_settings
 
 
 @lru_cache(maxsize=4)

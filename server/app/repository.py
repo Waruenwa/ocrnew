@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.database import get_jobs_collection
+from app.core.database import get_jobs_collection
 from app.schemas import JobRecord, JobStatus, PageResult, TextSegment
 
 

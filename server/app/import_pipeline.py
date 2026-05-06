@@ -18,8 +18,8 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pymongo.errors import DuplicateKeyError
 
 from app.anchor_provider import AnchorLine, detect_anchor_lines
-from app.config import Settings, load_settings
-from app.database import get_imports_collection
+from app.core.config import Settings, load_settings
+from app.core.database import get_imports_collection
 from app.schemas import ImportPageAsset, ImportRecord, ImportStatus
 from app.typhoon import (
     SUPPORTED_EXTENSIONS,

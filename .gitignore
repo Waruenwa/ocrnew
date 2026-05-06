@@ -1,11 +1,27 @@
 .DS_Store
 .env
+.env.*
+!.env.example
+!**/.env.example
 .env.local
 .venv/
 __pycache__/
 *.pyc
+*.log
+
+node_modules/
+.next/
+dist/
+build/
+coverage/
+
+client/.env.local
 client/.next/
 client/node_modules/
 client/out/
+client/tsconfig.tsbuildinfo
+
+server/.env
+server/.venv/
 server/data/
 
