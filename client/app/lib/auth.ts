@@ -111,7 +111,7 @@ function clearStoredAuth() {
   window.localStorage.removeItem("username");
 }
 
-function getAuthHeaders(): HeadersInit {
+export function getAuthHeaders(): HeadersInit {
   const token = getStoredToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }

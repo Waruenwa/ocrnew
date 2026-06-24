@@ -36,14 +36,6 @@ def _is_ollama_generate_url(raw_url: str) -> bool:
     return parsed.path.rstrip("/") == "/api/generate"
 
 
-def _is_ollama_chat_url(raw_url: str) -> bool:
-    try:
-        parsed = urlparse(raw_url)
-    except ValueError:
-        return False
-    return parsed.path.rstrip("/") == "/api/chat"
-
-
 def _resolve_ocr_task_type(settings: Settings) -> str:
     normalized_model = settings.ocr_model.strip().lower()
     if "typhoon-ocr1.5" in normalized_model:
@@ -62,6 +54,14 @@ def _resolve_ocr_task_type(settings: Settings) -> str:
 
 def _resolve_ocr_repeat_penalty(task_type: str) -> float:
     return 1.1 if task_type == "v1.5" else 1.2
+
+
+def _resolve_ocr_temperature(task_type: str) -> float:
+    return 0.0 if task_type == "v1.5" else 0.1
+
+
+def _resolve_ocr_top_p(task_type: str) -> float:
+    return 0.4 if task_type == "v1.5" else 0.6
 
 
 def validate_extension(file_path: Path) -> None:
@@ -102,7 +102,7 @@ def _normalize_ocr_response(raw_output: str) -> str:
         for key in ("natural_text", "markdown", "text", "content", "result"):
             value = parsed.get(key)
             if isinstance(value, str) and value.strip():
-                return _strip_ocr_non_text_blocks(value)
+                return _repair_thai_mojibake_if_needed(_strip_ocr_non_text_blocks(value))
 
     for key in ("natural_text", "markdown", "text", "content", "result"):
         marker = f'"{key}"'
@@ -131,13 +131,61 @@ def _normalize_ocr_response(raw_output: str) -> str:
             .strip()
         )
         if value:
-            return _strip_ocr_non_text_blocks(value)
+            return _repair_thai_mojibake_if_needed(_strip_ocr_non_text_blocks(value))
 
-    return _strip_ocr_non_text_blocks(raw_output)
+    return _repair_thai_mojibake_if_needed(_strip_ocr_non_text_blocks(raw_output))
 
 
 def _strip_ocr_non_text_blocks(text: str) -> str:
     return re.sub(r"\n?\s*<figure>.*?</figure>\s*\n?", "\n", text, flags=re.IGNORECASE | re.DOTALL).strip()
+
+
+def _repair_thai_mojibake_if_needed(text: str) -> str:
+    if not _looks_like_thai_mojibake(text):
+        return text
+
+    repaired = _decode_cp874_mojibake(text)
+    if not repaired or _looks_like_thai_mojibake(repaired):
+        return text
+    return repaired.strip()
+
+
+def _looks_like_thai_mojibake(text: str) -> bool:
+    if not text:
+        return False
+
+    compact = "".join(character for character in text if not character.isspace())
+    if not compact:
+        return False
+
+    thai_count = sum(1 for character in compact if "\u0e00" <= character <= "\u0e7f")
+    marker_count = (
+        compact.count("\u0e40\u0e18")
+        + compact.count("\u0e40\u0e19")
+        + compact.count("\u0e42")
+        + compact.count("\u20ac")
+    )
+    control_count = sum(1 for character in compact if 0x80 <= ord(character) <= 0x9F)
+    surrogate_count = sum(1 for character in compact if 0xDC80 <= ord(character) <= 0xDCFF)
+    marker_ratio = (marker_count + control_count + surrogate_count) / max(len(compact), 1)
+    return thai_count >= 4 and marker_count >= 2 and marker_ratio >= 0.08
+
+
+def _decode_cp874_mojibake(text: str) -> str | None:
+    reconstructed = bytearray()
+    try:
+        for character in text:
+            codepoint = ord(character)
+            if 0xDC80 <= codepoint <= 0xDCFF:
+                reconstructed.append(codepoint - 0xDC00)
+                continue
+            if codepoint <= 0xFF:
+                reconstructed.append(codepoint)
+                continue
+            reconstructed.extend(character.encode("cp874", errors="surrogateescape"))
+        return bytes(reconstructed).decode("utf-8")
+    except UnicodeError:
+        return None
 
 
 def _adapt_ocr_prompt_for_model(prompt_text: str, task_type: str) -> str:
@@ -147,11 +195,16 @@ def _adapt_ocr_prompt_for_model(prompt_text: str, task_type: str) -> str:
     return (
         prompt_text.rstrip()
         + "\n\n"
-        + "Additional OCR rules for Thai legal documents:\n"
-        + "- Transcribe only visible document text.\n"
-        + "- Do not describe seals, logos, Garuda emblems, signatures, stamps, borders, or page decorations.\n"
-        + "- Do not output <figure> blocks or visual summaries.\n"
-        + "- Preserve Thai numerals, case numbers, dates, money amounts, and line order exactly."
+        + "Additional OCR rules for Thai government forms and legal documents:\n"
+        + "- Transcribe only visible printed or handwritten text from the document.\n"
+        + "- Keep the original reading order and put each visually separate line on its own line.\n"
+        + "- Do not describe seals, logos, Garuda emblems, signatures, stamps, borders, watermark artwork, or page decorations.\n"
+        + "- Do not output <figure> blocks, visual summaries, explanations, tables, JSON, or markdown formatting.\n"
+        + "- Preserve Thai digits, Arabic digits, ID numbers, house codes, dates, names, addresses, money amounts, and punctuation exactly as visible.\n"
+        + "- Do not omit standalone numeric lines, Thai citizen IDs, house codes, short parent-name rows, nationality rows, or footer dates just because they look faint or isolated.\n"
+        + "- For Thai personal names, do not autocorrect to a common spelling and do not infer from context. "
+        + "Read the glyphs exactly, especially sara am (ำ), upper/lower vowels, tone marks, final consonants, and visually similar letters.\n"
+        + "- If a character is unclear, keep the closest visible reading rather than inventing neighboring-field text."
     )
 
 
@@ -233,8 +286,8 @@ def _run_ollama_generate_ocr(
         "images": [image_base64],
         "stream": False,
         "options": {
-            "temperature": 0.1,
-            "top_p": 0.6,
+            "temperature": _resolve_ocr_temperature(task_type),
+            "top_p": _resolve_ocr_top_p(task_type),
             "repeat_penalty": _resolve_ocr_repeat_penalty(task_type),
             "num_predict": settings.ocr_num_predict,
         },
@@ -257,7 +310,10 @@ def _run_ollama_generate_ocr(
     raw_output = str(response_payload.get("response") or "")
     if not raw_output.strip():
         raise RuntimeError(f"Ollama OCR returned an empty response: {response_payload}")
-    return _normalize_ocr_response(raw_output)
+    normalized_output = _normalize_ocr_response(raw_output)
+    if _looks_like_thai_mojibake(normalized_output):
+        raise RuntimeError("Ollama OCR returned Thai mojibake text; retry with smaller OCR settings or another candidate.")
+    return normalized_output
 
 
 def _run_ocr(
@@ -286,7 +342,10 @@ def _run_ocr(
             target_image_dim=target_image_dim,
             task_type=task_type,
         )
-    return _normalize_ocr_response(ocr_document(**kwargs))
+    normalized_output = _normalize_ocr_response(ocr_document(**kwargs))
+    if _looks_like_thai_mojibake(normalized_output):
+        raise RuntimeError("OCR returned Thai mojibake text; retry with smaller OCR settings or another candidate.")
+    return normalized_output
 
 
 def _ocr_models_to_try(settings: Settings) -> tuple[str, ...]:
@@ -452,6 +511,7 @@ def _score_ocr_markdown(markdown: str) -> float:
     replacement_characters = markdown.count("\ufffd")
     short_line_count = sum(1 for line in candidate_lines if _normalized_text_length(line) <= 2)
     repeated_watermark_penalty = 2800.0 if _looks_like_repeated_watermark_ocr(markdown) else 0.0
+    mojibake_penalty = 3500.0 if _looks_like_thai_mojibake(markdown) else 0.0
 
     return (
         float(non_space_characters)
@@ -460,6 +520,7 @@ def _score_ocr_markdown(markdown: str) -> float:
         - (short_line_count * 12.0)
         - (replacement_characters * 80.0)
         - repeated_watermark_penalty
+        - mojibake_penalty
     )
 
 
@@ -537,6 +598,8 @@ def _cleaned_ocr_needs_comparison(markdown: str) -> bool:
     if not markdown.strip():
         return True
     if _looks_like_generic_image_description(markdown):
+        return True
+    if _looks_like_thai_mojibake(markdown):
         return True
     if _looks_like_repeated_watermark_ocr(markdown):
         return True
@@ -1436,20 +1499,18 @@ def run_vision_json(
 ) -> dict[str, object]:
     if not settings.vision_ready:
         raise RuntimeError("Vision model is not configured.")
-    if not _is_ollama_chat_url(settings.vision_base_url):
+    uses_generate_endpoint = _is_ollama_generate_url(settings.vision_base_url)
+    if not uses_generate_endpoint:
         raise RuntimeError(
-            f"Unsupported vision endpoint: {settings.vision_base_url}. Expected an Ollama /api/chat URL."
+            f"Unsupported vision endpoint: {settings.vision_base_url}. "
+            "Expected an Ollama /api/generate URL."
         )
 
+    image_base64 = _image_to_base64_png(image.convert("RGB"))
     payload = {
         "model": settings.vision_model,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt,
-                "images": [_image_to_base64_png(image.convert("RGB"))],
-            }
-        ],
+        "prompt": prompt,
+        "images": [image_base64],
         "stream": False,
         "format": "json",
         "options": {
@@ -2129,52 +2190,72 @@ def compare_ocr_page_sources(
         compare_models = tuple(model for model in ocr_models if model != primary_model)
 
         run_source_with_model(
+            "original",
+            original_file_path,
+            source_is_cleaned=True,
+            model=primary_model,
+        )
+        run_source_with_model(
             "cleaned",
             cleaned_file_path,
             source_is_cleaned=True,
             model=primary_model,
         )
-        cleaned_record = best_record("cleaned")
-        cleaned_markdown = (
-            str(cleaned_record.get("markdown") or "")
-            if cleaned_record is not None
+
+        primary_records = [record for record in (best_record("original"), best_record("cleaned")) if record]
+        best_primary_record = (
+            max(primary_records, key=lambda record: float(record.get("score") or 0.0))
+            if primary_records
             else None
         )
-        if (
-            page_number == 1
-            and cleaned_markdown is not None
-            and not _contains_latin_case_series(cleaned_markdown)
-        ):
-            run_source_with_model(
-                "original",
-                original_file_path,
-                source_is_cleaned=True,
-                model=primary_model,
-            )
-        cleaned_score = float(cleaned_record.get("score") or 0.0) if cleaned_record is not None else 0.0
-        cleaned_is_suspicious = cleaned_markdown is None or _cleaned_ocr_needs_comparison(cleaned_markdown)
-        should_try_compare_model = cleaned_markdown is not None and (
-            cleaned_is_suspicious or cleaned_score < 450
+        best_primary_markdown = (
+            str(best_primary_record.get("markdown") or "")
+            if best_primary_record is not None
+            else None
         )
-        if should_try_compare_model:
+        best_primary_score = (
+            float(best_primary_record.get("score") or 0.0)
+            if best_primary_record is not None
+            else 0.0
+        )
+        best_primary_is_suspicious = (
+            best_primary_markdown is None
+            or _cleaned_ocr_needs_comparison(best_primary_markdown)
+            or best_primary_score < 450
+        )
+
+        if best_primary_is_suspicious:
             for model in compare_models:
+                run_source_with_model(
+                    "original",
+                    original_file_path,
+                    source_is_cleaned=True,
+                    model=model,
+                )
                 run_source_with_model(
                     "cleaned",
                     cleaned_file_path,
                     source_is_cleaned=True,
                     model=model,
                 )
-            cleaned_record = best_record("cleaned")
-            cleaned_markdown = (
-                str(cleaned_record.get("markdown") or "")
-                if cleaned_record is not None
-                else None
-            )
-            cleaned_score = float(cleaned_record.get("score") or 0.0) if cleaned_record is not None else 0.0
-            cleaned_is_suspicious = cleaned_markdown is None or _cleaned_ocr_needs_comparison(cleaned_markdown)
 
-        should_try_aggressive = cleaned_markdown is not None and (
-            cleaned_is_suspicious or cleaned_score < 450
+        current_best_record = max(
+            candidate_records,
+            key=lambda record: float(record.get("score") or 0.0),
+        ) if candidate_records else None
+        current_best_markdown = (
+            str(current_best_record.get("markdown") or "")
+            if current_best_record is not None
+            else None
+        )
+        current_best_score = (
+            float(current_best_record.get("score") or 0.0)
+            if current_best_record is not None
+            else 0.0
+        )
+        should_try_aggressive = current_best_markdown is not None and (
+            _cleaned_ocr_needs_comparison(current_best_markdown)
+            or current_best_score < 450
         )
 
         if should_try_aggressive:
@@ -2190,7 +2271,7 @@ def compare_ocr_page_sources(
                     source_is_cleaned=True,
                     model=primary_model,
                 )
-                if cleaned_is_suspicious:
+                if best_primary_is_suspicious:
                     for model in compare_models:
                         run_source_with_model(
                             "aggressive",
@@ -2202,19 +2283,19 @@ def compare_ocr_page_sources(
                     "The pipeline tried an aggressive black/white OCR image because watermark cleanup was important for this page."
                 )
 
-        if cleaned_markdown is None:
-            suspicious_reasons.append("Cleaned OCR failed, so extra OCR candidates were skipped for this page.")
-        elif page_number == 1:
+        if best_primary_record is None:
+            suspicious_reasons.append("Original and cleaned OCR both failed before candidate selection.")
+        elif should_try_aggressive:
             suspicious_reasons.append(
-                "The first page header is critical, so the pipeline also checked the original image."
+                "OCR quality looked uncertain, so the pipeline compared original, cleaned, and aggressive candidates."
             )
-        elif _cleaned_ocr_needs_comparison(cleaned_markdown):
+        elif best_primary_is_suspicious:
             suspicious_reasons.append(
-                "Cleaned OCR looked suspicious, so the pipeline compared cleaned aggressive candidates only."
+                "OCR quality looked uncertain, so the pipeline compared original and cleaned candidates with extra models."
             )
         else:
             suspicious_reasons.append(
-                "Cleaned OCR looked usable, so no original watermarked OCR was run for this page."
+                "OCR quality looked usable after comparing the original and cleaned candidates."
             )
     finally:
         for temp_path in temp_candidate_paths:
@@ -2256,21 +2337,24 @@ def compare_ocr_page_sources(
             + "."
         )
 
-    diff_similarity: float | None = None
     if cleaned_markdown is None:
         suspicious_reasons.append("No cleaned OCR candidate succeeded, so this page may need a manual check.")
 
-    if cleaned_markdown is not None:
-        selected_source = "cleaned"
-        if original_record is None:
-            suspicious_reasons.append("Cleaned OCR is the only OCR source used for this page.")
-        else:
-            suspicious_reasons.append("Cleaned OCR was selected after checking the original image.")
-    else:
-        selected_record = max(candidate_records, key=lambda record: float(record.get("score") or 0.0))
-        selected_source = str(selected_record.get("normalized_source") or selected_record.get("source") or "cleaned")
+    if original_record is None:
+        suspicious_reasons.append("Original OCR did not produce a usable candidate for this page.")
+    if cleaned_record is None:
+        suspicious_reasons.append("Cleaned OCR did not produce a usable candidate for this page.")
 
-    selected_record = cleaned_record
+    diff_similarity: float | None = None
+    if original_markdown is not None and cleaned_markdown is not None:
+        diff_similarity = SequenceMatcher(
+            None,
+            _normalize_text_for_similarity(original_markdown),
+            _normalize_text_for_similarity(cleaned_markdown),
+        ).ratio()
+
+    selected_record = max(candidate_records, key=lambda record: float(record.get("score") or 0.0))
+    selected_source = str(selected_record.get("normalized_source") or selected_record.get("source") or "cleaned")
     if (
         page_number == 1
         and original_record is not None
@@ -2282,9 +2366,6 @@ def compare_ocr_page_sources(
         suspicious_reasons.append(
             "The original first-page OCR kept a Latin case-number series that cleaned OCR missed."
         )
-    if selected_record is None:
-        selected_record = max(candidate_records, key=lambda record: float(record.get("score") or 0.0))
-        selected_source = str(selected_record.get("normalized_source") or selected_record.get("source") or "cleaned")
 
     selected_markdown = str(selected_record.get("markdown") or "")
     selected_score = float(selected_record.get("score") or 0.0)
@@ -2309,7 +2390,7 @@ def compare_ocr_page_sources(
         "cleaned_markdown": cleaned_markdown,
         "original_score": original_score,
         "cleaned_score": cleaned_score,
-        "original_error": None,
+        "original_error": source_error("original"),
         "cleaned_error": source_error("cleaned") or source_error("aggressive"),
         "diff_similarity": diff_similarity,
         "candidate_scores": [

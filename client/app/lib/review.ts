@@ -1,12 +1,12 @@
-export type ImportStatus =
-  | "uploaded"
-  | "cleaning"
-  | "ocr_queued"
-  | "ocr_running"
-  | "ready_for_review"
-  | "ocr_failed"
-  | "review_ready"
-  | "checked";
+﻿export type ImportStatus =
+  | 'uploaded'
+  | 'cleaning'
+  | 'ocr_queued'
+  | 'ocr_running'
+  | 'ready_for_review'
+  | 'ocr_failed'
+  | 'review_ready'
+  | 'checked';
 
 export type TextSegment = {
   id: string;
@@ -21,39 +21,58 @@ export type TextSegment = {
 };
 
 export type ReviewFieldKey =
-  | "caseRedNo"
-  | "caseBlackNo"
-  | "courtName"
-  | "payAmount"
-  | "interestRate"
-  | "principalAmount"
-  | "filingDate"
-  | "attorneyFee"
-  | "tableName"
-  | "personId"
-  | "houseCode"
-  | "personName"
-  | "gender"
-  | "nationality"
-  | "birthDate"
-  | "age"
-  | "status"
-  | "motherName"
-  | "motherId"
-  | "motherNationality"
-  | "fatherName"
-  | "fatherId"
-  | "fatherNationality"
-  | "address"
-  | "moveInDate"
-  | "remark"
-  | "updateDate";
+  | 'caseRedNo'
+  | 'caseBlackNo'
+  | 'courtName'
+  | 'payAmount'
+  | 'interestRate'
+  | 'principalAmount'
+  | 'filingDate'
+  | 'attorneyFee'
+  | 'tableName'
+  | 'personId'
+  | 'houseCode'
+  | 'personName'
+  | 'gender'
+  | 'nationality'
+  | 'birthDate'
+  | 'age'
+  | 'status'
+  | 'motherName'
+  | 'motherId'
+  | 'motherNationality'
+  | 'fatherName'
+  | 'fatherId'
+  | 'fatherNationality'
+  | 'address'
+  | 'postalCode'
+  | 'moveInDate'
+  | 'deceasedDate'
+  | 'remark'
+  | 'updateDate';
 
 export type ReviewField = {
   value: string | null;
   pageNumber: number | null;
   bbox: [number, number, number, number] | null;
   source?: string | null;
+  score?: number | null;
+  confidence?: number | null;
+  reviewStatus?: string | null;
+  reviewNote?: string | null;
+  alternatives?: Array<{
+    value?: string | null;
+    source?: string | null;
+    sources?: string[];
+    score?: number | null;
+    confidence?: number | null;
+    reason?: string | null;
+  }>;
+  appliedCorrections?: Array<{
+    type?: string | null;
+    source?: string | null;
+    replacement?: string | null;
+  }>;
 };
 
 export type ReviewKeywordHit = {
@@ -69,8 +88,19 @@ export type ReviewData = {
   documentType?: string | null;
   visionModel?: string | null;
   visionErrors?: string[];
+  flags?: {
+    deceased?: boolean;
+    lifeStatus?: string | null;
+    deceasedDate?: string | null;
+    matchedKeywords?: string[];
+  } | null;
   fields: Partial<Record<ReviewFieldKey, ReviewField>>;
   keywordHits: ReviewKeywordHit[];
+  qualityIssues?: Array<Record<string, unknown>>;
+  visionFieldVerification?: {
+    verifiedFields?: Array<Record<string, unknown>>;
+    errors?: string[];
+  };
 };
 
 export type ImportPageAsset = {
@@ -85,7 +115,7 @@ export type ImportPageAsset = {
   corrected_markdown: string | null;
   original_markdown: string | null;
   cleaned_markdown: string | null;
-  selected_markdown_source: "original" | "cleaned" | "manual" | null;
+  selected_markdown_source: 'original' | 'cleaned' | 'manual' | null;
   selected_markdown_score: number | null;
   selected_ocr_model: string | null;
   selected_candidate_source: string | null;
@@ -104,6 +134,16 @@ export type ImportPageAsset = {
   cleaned_ocr_error: string | null;
   diff_similarity: number | null;
   suspicious_reasons: string[];
+  processing_timing?: {
+    unit?: string;
+    stages_ms?: Record<string, number>;
+    total_before_persistence_ms?: number;
+  } | null;
+  ocr_current_stage?: {
+    key?: string;
+    field?: string | null;
+    started_at?: string;
+  } | null;
   segments: TextSegment[];
 };
 
@@ -120,6 +160,11 @@ export type ImportRecord = {
   updated_at: string;
   checked_at: string | null;
   checked_by: string | null;
+  save_btn?: string | null;
+  review_status?: string | null;
+  assigned_to_user_id?: string | null;
+  assigned_to_username?: string | null;
+  assigned_at?: string | null;
   note: string | null;
   ocr_markdown: string | null;
   raw_ocr_markdown: string | null;
@@ -129,6 +174,12 @@ export type ImportRecord = {
   correction_model: string | null;
   ocr_error_message: string | null;
   ocr_completed_at: string | null;
+  ocr_quality?: string | null;
+  field_validation_issues?: Array<{
+    field?: ReviewFieldKey | string | null;
+    issue?: string | null;
+    message?: string | null;
+  }>;
   review_data?: ReviewData | null;
   pages: ImportPageAsset[];
 };
@@ -146,22 +197,23 @@ export type AppConfig = {
 };
 
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') ??
+  'http://localhost:8000';
 
 export const importStatusLabels: Record<ImportStatus, string> = {
-  uploaded: "Uploaded",
-  cleaning: "Cleaning",
-  ocr_queued: "OCR queued",
-  ocr_running: "OCR running",
-  ready_for_review: "Ready for review",
-  ocr_failed: "OCR failed",
-  review_ready: "Review ready",
-  checked: "Checked",
+  uploaded: 'Uploaded',
+  cleaning: 'Cleaning',
+  ocr_queued: 'OCR queued',
+  ocr_running: 'OCR running',
+  ready_for_review: 'Ready for review',
+  ocr_failed: 'OCR failed',
+  review_ready: 'Review ready',
+  checked: 'Checked',
 };
 
 export function formatDate(value: string | null) {
   if (!value) {
-    return "Not available";
+    return 'Not available';
   }
 
   const date = new Date(value);
@@ -169,8 +221,8 @@ export function formatDate(value: string | null) {
     return value;
   }
 
-  return new Intl.DateTimeFormat("th-TH", {
-    dateStyle: "medium",
-    timeStyle: "short",
+  return new Intl.DateTimeFormat('th-TH', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
   }).format(date);
 }

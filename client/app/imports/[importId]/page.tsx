@@ -453,7 +453,7 @@ export default function ImportReviewPage() {
       setActiveSegmentId(null);
       setEditingSegmentId(null);
       setIsLineEditorOpen(false);
-      setSaveMessage(`Saved page ${selectedPage.page_number} to MongoDB.`);
+      setSaveMessage(`Saved page ${selectedPage.page_number} to SQL Server.`);
     } catch (error) {
       setErrorMessage(
         error instanceof Error
@@ -1256,7 +1256,7 @@ function ReviewPageView({
                   {resultMode === 'edit' ? (
                     <>
                       <HintBox>
-                        Edit the OCR text for this page, save it to MongoDB,
+                        Edit the OCR text for this page, save it to SQL Server,
                         then continue to the check form below when the page
                         looks correct.
                       </HintBox>

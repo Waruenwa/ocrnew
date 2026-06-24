@@ -2,7 +2,6 @@ import type { ImportRecord } from './review';
 
 export const DOCUMENT_CATEGORIES = [
   { value: 'judgment', label: 'Judgment' },
-  { value: 'tr', label: 'ทร' },
   { value: 'contract', label: 'Contract' },
   { value: 'invoice', label: 'Invoice' },
   { value: 'evidence', label: 'Evidence' },

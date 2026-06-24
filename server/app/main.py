@@ -26,6 +26,7 @@ from app.import_pipeline import (
     save_import_page_markdown,
     scan_source_folder,
 )
+from app.manager_uploads import router as manager_uploads_router, staff_router
 from app.repository import (
     complete_job,
     create_job,
@@ -45,6 +46,7 @@ from app.schemas import (
     ImportRecord,
     JobRecord,
 )
+from app.tr_watermark_cleaner import is_tr_document_category
 from app.typhoon import (
     build_page_segments,
     count_pages,
@@ -67,6 +69,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(manager_uploads_router)
+app.include_router(staff_router)
 
 
 async def run_startup_import_scan() -> None:
@@ -246,6 +250,12 @@ async def upload_import_file(
     file: UploadFile = File(...),
     document_category: str = Form(default="uncategorized"),
 ) -> ImportRecord:
+    if is_tr_document_category(document_category):
+        raise HTTPException(
+            status_code=400,
+            detail="TR documents must be uploaded through the manager TR upload flow.",
+        )
+
     if not settings.ocr_ready:
         raise HTTPException(
             status_code=503,

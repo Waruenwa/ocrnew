@@ -69,6 +69,8 @@ class ImportPageAsset(BaseModel):
     cleaned_ocr_error: str | None = None
     diff_similarity: float | None = None
     suspicious_reasons: list[str] = Field(default_factory=list)
+    processing_timing: dict[str, Any] | None = None
+    ocr_current_stage: dict[str, Any] | None = None
     segments: list[TextSegment] = Field(default_factory=list)
 
 
@@ -85,6 +87,11 @@ class ImportRecord(BaseModel):
     updated_at: str
     checked_at: str | None = None
     checked_by: str | None = None
+    save_btn: str | None = None
+    review_status: str | None = None
+    assigned_to_user_id: str | None = None
+    assigned_to_username: str | None = None
+    assigned_at: str | None = None
     note: str | None = None
     ocr_markdown: str | None = None
     raw_ocr_markdown: str | None = None
@@ -94,6 +101,8 @@ class ImportRecord(BaseModel):
     correction_model: str | None = None
     ocr_error_message: str | None = None
     ocr_completed_at: str | None = None
+    ocr_quality: str | None = None
+    field_validation_issues: list[dict[str, Any]] = Field(default_factory=list)
     review_data: dict[str, Any] | None = None
     pages: list[ImportPageAsset] = Field(default_factory=list)
 

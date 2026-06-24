@@ -51,6 +51,7 @@ export default function Dashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string | null>(null);
   const [username, setUsername] = useState<string>('');
   const router = useRouter();
 
@@ -119,24 +120,42 @@ export default function Dashboard() {
     setImports(data);
   }
 
-  // Filtered imports for search
+  // Filtered imports for search and status
   const filteredImports = useMemo(() => {
-    if (!searchText) return imports;
-    return imports.filter(record => 
-      record.source_filename.toLowerCase().includes(searchText.toLowerCase()) ||
-      (record.document_category && record.document_category.toLowerCase().includes(searchText.toLowerCase()))
-    );
-  }, [imports, searchText]);
+    let result = imports;
+    
+    // Filter by search text
+    if (searchText) {
+      result = result.filter(record => 
+        record.source_filename.toLowerCase().includes(searchText.toLowerCase()) ||
+        (record.document_category && record.document_category.toLowerCase().includes(searchText.toLowerCase()))
+      );
+    }
+    
+    // Filter by card status
+    if (filterStatus) {
+      if (filterStatus === 'running') {
+        result = result.filter(i => ['uploaded', 'ocr_queued', 'cleaning', 'ocr_running'].includes(i.status));
+      } else if (filterStatus === 'review') {
+        result = result.filter(i => ['ready_for_review', 'review_ready'].includes(i.status));
+      } else if (filterStatus === 'completed') {
+        result = result.filter(i => i.status === 'checked');
+      } else if (filterStatus === 'failed') {
+        result = result.filter(i => i.status === 'ocr_failed');
+      }
+    }
+    
+    return result;
+  }, [imports, searchText, filterStatus]);
 
   // Derived Stats
   const stats = useMemo(() => {
     return {
       total: imports.length,
-      newDocs: imports.filter(i => i.status === 'uploaded' || i.status === 'ocr_queued').length,
-      inProgress: imports.filter(i => i.status === 'cleaning' || i.status === 'ocr_running').length,
-      pending: imports.filter(i => i.status === 'ocr_failed').length,
-      closed: imports.filter(i => i.status === 'ready_for_review' || i.status === 'review_ready' || i.status === 'checked').length,
-      cancelled: 0,
+      running: imports.filter(i => ['uploaded', 'ocr_queued', 'cleaning', 'ocr_running'].includes(i.status)).length,
+      review: imports.filter(i => ['ready_for_review', 'review_ready'].includes(i.status)).length,
+      completed: imports.filter(i => i.status === 'checked').length,
+      failed: imports.filter(i => i.status === 'ocr_failed').length,
     };
   }, [imports]);
 
@@ -242,11 +261,13 @@ export default function Dashboard() {
         },
         components: {
           Table: {
-            headerBg: '#136360',
-            headerColor: '#ffffff',
-            headerBorderRadius: 8,
-            rowHoverBg: '#f8fafc',
-            cellPaddingBlock: 16,
+            headerBg: '#f8fafc',
+            headerColor: '#475569',
+            headerBorderRadius: 12,
+            rowHoverBg: '#f1f5f9',
+            cellPaddingBlock: 10,
+            cellPaddingInline: 12,
+            fontSize: 13,
           },
           Button: {
             defaultShadow: 'none',
@@ -313,13 +334,52 @@ export default function Dashboard() {
         {/* Top Header / Stats Section */}
         <Box bg="white" borderRadius="24px" p="32px" mb="32px" boxShadow="0 10px 40px rgba(0,0,0,0.02)">
           {/* Stats Cards */}
-          <Grid templateColumns="repeat(6, 1fr)" gap="16px">
-            <StatCard title="TOTAL" value={stats.total} color="#3b82f6" icon={<FiDatabase />} bg="#eff6ff" />
-            <StatCard title="New" value={stats.newDocs} color="#ef4444" icon={<FiClock />} bg="#fef2f2" />
-            <StatCard title="In Progress" value={stats.inProgress} color="#f97316" icon={<FiTool />} bg="#fff7ed" />
-            <StatCard title="Pending" value={stats.pending} color="#eab308" icon={<FiEdit />} bg="#fefce8" />
-            <StatCard title="Closed" value={stats.closed} color="#22c55e" icon={<FiCheckCircle />} bg="#f0fdf4" />
-            <StatCard title="Cancelled" value={stats.cancelled} color="#94a3b8" icon={<FiXCircle />} bg="#f8fafc" />
+          <Grid templateColumns="repeat(5, 1fr)" gap="12px">
+            <StatCard 
+              title="All Documents" 
+              value={stats.total} 
+              color="#64748b" 
+              icon={<FiDatabase />} 
+              bg="#f1f5f9"
+              isActive={filterStatus === null}
+              onClick={() => setFilterStatus(null)}
+            />
+            <StatCard 
+              title="OCR Running" 
+              value={stats.running} 
+              color="#3b82f6" 
+              icon={<FiClock />} 
+              bg="#eff6ff"
+              isActive={filterStatus === 'running'}
+              onClick={() => setFilterStatus('running')}
+            />
+            <StatCard 
+              title="Review" 
+              value={stats.review} 
+              color="#f97316" 
+              icon={<FiEdit />} 
+              bg="#fff7ed"
+              isActive={filterStatus === 'review'}
+              onClick={() => setFilterStatus('review')}
+            />
+            <StatCard 
+              title="Completed" 
+              value={stats.completed} 
+              color="#22c55e" 
+              icon={<FiCheckCircle />} 
+              bg="#f0fdf4"
+              isActive={filterStatus === 'completed'}
+              onClick={() => setFilterStatus('completed')}
+            />
+            <StatCard 
+              title="Failed" 
+              value={stats.failed} 
+              color="#ef4444" 
+              icon={<FiXCircle />} 
+              bg="#fef2f2"
+              isActive={filterStatus === 'failed'}
+              onClick={() => setFilterStatus('failed')}
+            />
           </Grid>
         </Box>
 
@@ -336,8 +396,8 @@ export default function Dashboard() {
                   <Title level={3} style={{ margin: 0, color: '#111827', fontWeight: 800 }}>Dashboard OCR</Title>
                   <HStack bg="#f1f5f9" px="12px" py="4px" borderRadius="full" fontSize="0.85rem" fontWeight="600" color="#475569" gap="8px">
                     <Box>จำนวนเอกสารค้าง</Box>
-                    <Center bg="#ef4444" color="white" borderRadius="full" w="24px" h="24px" fontSize="0.75rem">
-                      {stats.inProgress + stats.pending}
+                    <Center bg="#ef4444" color="white" borderRadius="full" w="20px" h="20px" fontSize="0.7rem">
+                      {stats.running}
                     </Center>
                     <Box>รายการ</Box>
                   </HStack>
@@ -399,31 +459,61 @@ export default function Dashboard() {
 }
 
 // Subcomponents
-function StatCard({ title, value, color, icon, bg }: { title: string, value: number, color: string, icon: React.ReactNode, bg: string }) {
+function StatCard({ 
+  title, 
+  value, 
+  color, 
+  icon, 
+  bg, 
+  isActive, 
+  onClick 
+}: { 
+  title: string, 
+  value: number, 
+  color: string, 
+  icon: React.ReactNode, 
+  bg: string,
+  isActive?: boolean,
+  onClick?: () => void
+}) {
   return (
     <Flex 
-      bg="white" 
-      border="1px solid #e2e8f0"
-      borderLeft={`6px solid ${color}`}
+      bg={isActive ? "white" : "rgba(255, 255, 255, 0.6)"}
+      border="1px solid"
+      borderColor={isActive ? color : "#e2e8f0"}
       borderRadius="16px" 
-      p="20px 24px"
+      p="14px 18px"
       justify="space-between"
       align="center"
-      boxShadow="0 2px 10px rgba(0,0,0,0.02)"
-      transition="all 0.3s ease"
-      css={{
-        '&:hover': {
-          transform: 'translateY(-4px)',
-          boxShadow: '0 12px 24px rgba(0,0,0,0.06)',
-          borderColor: '#cbd5e1'
-        }
+      boxShadow={isActive ? `0 10px 20px ${color}15` : "0 2px 10px rgba(0,0,0,0.02)"}
+      transition="all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
+      cursor="pointer"
+      onClick={onClick}
+      role="button"
+      _hover={{
+        transform: 'translateY(-2px)',
+        boxShadow: `0 8px 16px ${color}10`,
+        borderColor: color,
+        bg: "white"
       }}
+      position="relative"
+      overflow="hidden"
     >
+      {isActive && (
+        <Box 
+          position="absolute" 
+          left={0} 
+          top={0} 
+          bottom={0} 
+          w="4px" 
+          bg={color} 
+        />
+      )}
       <Box>
-        <Box color="#64748b" fontSize="0.85rem" fontWeight="700" textTransform="uppercase" mb="6px" letterSpacing="0.02em">{title}</Box>
-        <Box color="#0f172a" fontSize="2rem" fontWeight="900" lineHeight="1">{value}</Box>
+        <Box color="#64748b" fontSize="0.75rem" fontWeight="700" textTransform="uppercase" mb="4px" letterSpacing="0.05em">{title}</Box>
+        <Box color="#0f172a" fontSize="1.6rem" fontWeight="900" lineHeight="1">{value}</Box>
       </Box>
-      <Center bg={bg} color={color} w="48px" h="48px" borderRadius="full" fontSize="1.4rem">
+      <Center bg={bg} color={color} w="40px" h="40px" borderRadius="12px" fontSize="1.2rem">
         {icon}
       </Center>
     </Flex>

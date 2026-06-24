@@ -24,4 +24,5 @@ client/tsconfig.tsbuildinfo
 server/.env
 server/.venv/
 server/data/
+server/data_storage/
 

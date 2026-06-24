@@ -1,4 +1,6 @@
 :root {
+  --font-display: "Noto Sans Thai", "Segoe UI", Tahoma, Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
   --bg: #f7f3ea;
   --panel: rgba(255, 255, 255, 0.9);
   --panel-strong: #ffffff;
@@ -19,6 +21,7 @@
 
 html {
   min-height: 100%;
+
   background:
     radial-gradient(circle at top left, rgba(231, 111, 45, 0.12), transparent 28%),
     radial-gradient(circle at top right, rgba(15, 118, 110, 0.1), transparent 24%),
@@ -46,7 +49,7 @@ button {
 .roleShell {
   min-height: 100vh;
   padding: 32px;
-  background: linear-gradient(135deg, #eef2f7 0%, #f8fafc 100%);
+  background: linear-gradient(135deg, #f4f7fa 0%, #ffffff 100%);
 }
 
 .roleShellCentered {
@@ -62,15 +65,18 @@ button {
   max-width: 1180px;
   margin: 0 auto 24px;
   padding: 28px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #ffffff;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
 }
 
 .roleEyebrow {
-  font-weight: 700;
-  color: #136360;
+  font-weight: 800;
+  color: #2F5553;
   text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .roleStats {
@@ -82,7 +88,15 @@ button {
 }
 
 .roleStatCard {
-  border-radius: 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+  transition: all 0.3s ease;
+}
+
+.roleStatCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.06);
 }
 
 .rolePlaceholder {
@@ -103,7 +117,7 @@ button {
   place-items: center;
   width: 54px;
   height: 54px;
-  color: #136360;
+  color: #2F5553;
   font-size: 26px;
   border-radius: 8px;
   background: #ecfdf5;
@@ -117,8 +131,16 @@ button {
   margin: 0 auto;
 }
 
+.roleDashboardStack {
+  display: grid;
+  gap: 16px;
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
 .roleActionCard,
-.roleUploadCard {
+.roleUploadCard,
+.roleDashboardCard {
   border-radius: 8px;
 }
 
@@ -132,6 +154,52 @@ button {
 .roleActionCopy {
   display: grid;
   gap: 6px;
+}
+
+.roleDashboardToolbar,
+.roleDashboardActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.roleDashboardActions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.roleDashboardMetrics {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.roleDashboardMetrics div {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.roleDashboardMetrics strong {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.roleAssignModalBody {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.roleTableFilename {
+  display: block;
+  min-width: 180px;
+  overflow-wrap: anywhere;
 }
 
 .roleUploadHeader,
@@ -203,6 +271,102 @@ button {
 
 .roleFileList span {
   overflow-wrap: anywhere;
+}
+
+.roleAssignedTableWrap {
+  overflow: auto;
+  margin-top: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.roleAssignedTable {
+  width: 100%;
+  min-width: 860px;
+  border-collapse: collapse;
+}
+
+.roleAssignedTable th,
+.roleAssignedTable td {
+  padding: 14px 16px;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.roleAssignedTable th {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: #64748b;
+  text-transform: uppercase;
+  background: #f8fafc;
+}
+
+.roleAssignedTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.roleAssignedTable td:last-child,
+.roleAssignedTable th:last-child {
+  text-align: right;
+}
+
+.roleAssignedPrimary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  font-weight: 700;
+}
+
+.roleAssignedPrimary span {
+  overflow-wrap: anywhere;
+}
+
+.roleAssignedTable small {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+}
+
+.roleUploadResult {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(4, minmax(110px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+
+.roleFileErrors {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff1f2;
+}
+
+.roleFileErrors ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.roleOcrActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 
 .shell {
@@ -1247,7 +1411,8 @@ button {
   .queueSummaryRow,
   .diffColumns,
   .diffSourceGrid,
-  .diffRowHeader {
+  .diffRowHeader,
+  .roleUploadResult {
     grid-template-columns: 1fr;
   }
 
@@ -1257,5 +1422,20 @@ button {
   .codeBlock {
     min-height: 48vh;
     height: auto;
+  }
+
+  .roleOcrActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .roleDashboardToolbar,
+  .roleDashboardActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .roleDashboardMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

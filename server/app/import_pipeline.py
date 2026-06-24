@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
+import json
 import re
 import shutil
 import socket
@@ -15,11 +16,10 @@ from uuid import uuid4
 
 import fitz
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-from pymongo.errors import DuplicateKeyError
 
 from app.anchor_provider import AnchorLine, detect_anchor_lines
 from app.core.config import Settings, load_settings
-from app.core.database import get_imports_collection
+from app.core.database import DuplicateKeyError, get_imports_collection
 from app.schemas import ImportPageAsset, ImportRecord, ImportStatus
 from app.typhoon import (
     SUPPORTED_EXTENSIONS,
@@ -33,12 +33,18 @@ from app.typhoon import (
     run_ocr_page,
     validate_extension,
 )
-from app.tr_review import build_tr_review_data
+from app.tr_review import (
+    TR_REVIEW_VERSION,
+    build_tr_review_data,
+    get_tr_field_template,
+    normalize_tr_field_value,
+    validate_tr_field_value,
+)
 from app.tr_watermark_cleaner import build_tr_cleaned_image, is_tr_document_category
 from app.watermark_cleaner import DEFAULT_RENDER_DPI, clean_page_to_image, clean_pil_image, clean_pil_image_soft
 
 IMPORT_OCR_PIPELINE_VERSION = 71
-TR_IMPORT_OCR_PIPELINE_VERSION = 77
+TR_IMPORT_OCR_PIPELINE_VERSION = 80
 MANUAL_EDIT_REASON = "This page was manually edited after OCR."
 CASE_HEADER_CROP_REASON = "First-page case numbers were recovered from a focused header crop."
 DEFAULT_DOCUMENT_CATEGORY = "uncategorized"
@@ -52,24 +58,40 @@ OCR_BUSY_STATUSES = {
     ImportStatus.ocr_running.value,
 }
 ASCII_TO_THAI_DIGITS = str.maketrans("0123456789", "๐๑๒๓๔๕๖๗๘๙")
-CASE_BLACK_MARKERS = ("คดีหมายเลขดำที่", "คดีหมายเลขดำ", "หมายเลขดำที่", "หมายเลขดำ", "คดีดำเลขที่", "คดีดำที่", "คดีดำ")
-CASE_RED_MARKERS = ("คดีหมายเลขแดงที่", "คดีหมายเลขแดง", "หมายเลขแดงที่", "หมายเลขแดง", "คดีแดงเลขที่", "คดีแดงที่", "คดีแดง")
+CASE_BLACK_MARKERS = ("เธเธ”เธตเธซเธกเธฒเธขเน€เธฅเธเธ”เธณเธ—เธตเน", "เธเธ”เธตเธซเธกเธฒเธขเน€เธฅเธเธ”เธณ", "เธซเธกเธฒเธขเน€เธฅเธเธ”เธณเธ—เธตเน", "เธซเธกเธฒเธขเน€เธฅเธเธ”เธณ", "เธเธ”เธตเธ”เธณเน€เธฅเธเธ—เธตเน", "เธเธ”เธตเธ”เธณเธ—เธตเน", "เธเธ”เธตเธ”เธณ")
+CASE_RED_MARKERS = ("เธเธ”เธตเธซเธกเธฒเธขเน€เธฅเธเนเธ”เธเธ—เธตเน", "เธเธ”เธตเธซเธกเธฒเธขเน€เธฅเธเนเธ”เธ", "เธซเธกเธฒเธขเน€เธฅเธเนเธ”เธเธ—เธตเน", "เธซเธกเธฒเธขเน€เธฅเธเนเธ”เธ", "เธเธ”เธตเนเธ”เธเน€เธฅเธเธ—เธตเน", "เธเธ”เธตเนเธ”เธเธ—เธตเน", "เธเธ”เธตเนเธ”เธ")
+TR_VISION_FIELD_KEYS = ("personName", "motherName", "fatherName", "address")
+TR_VISION_VERIFY_FIELD_KEYS = {"personName", "address"}
+TR_VISION_NAME_FIELD_KEYS = {"personName", "motherName", "fatherName"}
+TR_VISION_PARENT_NAME_FIELDS = {"motherName", "fatherName"}
+TR_VISION_LOCKED_BBOX_OVERRIDES = {
+    "personName": (0.125, 0.286, 0.39, 0.319),
+    "motherName": (0.125, 0.358, 0.30, 0.394),
+    "fatherName": (0.125, 0.395, 0.30, 0.431),
+    "address": (0.125, 0.429, 0.86, 0.472),
+}
+TR_VISION_FIELD_HINTS = {
+    "personName": "Person full name. Keep Thai title/name exactly; do not include ID/date.",
+    "motherName": "Mother name from this row only. Do not include father name, ID, date, or nationality.",
+    "fatherName": "Father name from this row only. Do not include mother name, ID, date, or nationality.",
+    "address": "Address line from this row only. Keep visible Thai text exactly; do not include locality/registrar/footer rows below.",
+}
 CASE_HEADER_MARKERS = CASE_BLACK_MARKERS + CASE_RED_MARKERS
-JUDGMENT_KEYWORDS = ("พิพากษาให้จำเลย", "ชำระเงิน", "ค่าทนายความ")
-JUDGMENT_START_KEYWORDS = ("คำพิพากษา", "พิพากษาให้จำเลย", "พิพากษาให้จำเลบย")
+JUDGMENT_KEYWORDS = ("เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธข", "เธเธณเธฃเธฐเน€เธเธดเธ", "เธเนเธฒเธ—เธเธฒเธขเธเธงเธฒเธก")
+JUDGMENT_START_KEYWORDS = ("เธเธณเธเธดเธเธฒเธเธฉเธฒ", "เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธข", "เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธเธข")
 JUDGMENT_END_KEYWORDS = (
-    "ค่าใช้จ่ายในการดำเนินคดีให้เป็นพับ./",
-    "ให้เป็นพับ./",
-    "เป็นพับ./",
-    "พับ./",
+    "เธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธเธฒเธฃเธ”เธณเน€เธเธดเธเธเธ”เธตเนเธซเนเน€เธเนเธเธเธฑเธ./",
+    "เนเธซเนเน€เธเนเธเธเธฑเธ./",
+    "เน€เธเนเธเธเธฑเธ./",
+    "เธเธฑเธ./",
 )
 JUDGMENT_OCR_FALLBACK_END_MARKERS = (
-    "ค่าใช้จ่ายในการดำเนินคดีให้เป็นพับ",
-    "ค่าใช้จ่ายในการดำเนินคดีให้เป็บพับ",
-    "ให้เป็นพับ",
-    "ให้เป็บพับ",
-    "เป็นพับ",
-    "เป็บพับ",
+    "เธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธเธฒเธฃเธ”เธณเน€เธเธดเธเธเธ”เธตเนเธซเนเน€เธเนเธเธเธฑเธ",
+    "เธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธเธฒเธฃเธ”เธณเน€เธเธดเธเธเธ”เธตเนเธซเนเน€เธเนเธเธเธฑเธ",
+    "เนเธซเนเน€เธเนเธเธเธฑเธ",
+    "เนเธซเนเน€เธเนเธเธเธฑเธ",
+    "เน€เธเนเธเธเธฑเธ",
+    "เน€เธเนเธเธเธฑเธ",
 )
 FIRST_PAGE_FALLBACK_ANCHORS: dict[str, tuple[float, float, float, float]] = {
     "caseBlackNo": (0.56, 0.07, 0.89, 0.135),
@@ -81,15 +103,15 @@ RED_HEADER_VISION_CROP = (0.52, 0.17, 0.92, 0.25)
 COURT_VISION_CROP = (0.26, 0.22, 0.72, 0.44)
 JUDGMENT_VISION_CROP = (0.06, 0.43, 0.96, 0.98)
 JUDGMENT_NOISE_MARKERS = (
-    "สำหรับเรียกตู้ข้อมูลเท่านั้น",
-    "สำหรับเรียกคดีข้อมูลเท่านั้น",
-    "สำหรับเรียกตู้ห้องเตาบั้น",
-    "สำหรับศาลใช้",
+    "เธชเธณเธซเธฃเธฑเธเน€เธฃเธตเธขเธเธ•เธนเนเธเนเธญเธกเธนเธฅเน€เธ—เนเธฒเธเธฑเนเธ",
+    "เธชเธณเธซเธฃเธฑเธเน€เธฃเธตเธขเธเธเธ”เธตเธเนเธญเธกเธนเธฅเน€เธ—เนเธฒเธเธฑเนเธ",
+    "เธชเธณเธซเธฃเธฑเธเน€เธฃเธตเธขเธเธ•เธนเนเธซเนเธญเธเน€เธ•เธฒเธเธฑเนเธ",
+    "เธชเธณเธซเธฃเธฑเธเธจเธฒเธฅเนเธเน",
 )
 JUDGMENT_STOP_MARKERS = (
-    "ผู้เขียน",
-    "นายธรรมชัย",
-    "นางสาวสมหญิง",
+    "เธเธนเนเน€เธเธตเธขเธ",
+    "เธเธฒเธขเธเธฃเธฃเธกเธเธฑเธข",
+    "เธเธฒเธเธชเธฒเธงเธชเธกเธซเธเธดเธ",
 )
 
 
@@ -144,6 +166,7 @@ def _build_import_record(document: dict[str, object]) -> ImportRecord:
         updated_at=str(document.get("updated_at", "")),
         checked_at=document.get("checked_at"),
         checked_by=document.get("checked_by"),
+        save_btn=document.get("save_btn"),
         note=document.get("note"),
         ocr_markdown=document.get("ocr_markdown"),
         raw_ocr_markdown=document.get("raw_ocr_markdown"),
@@ -153,6 +176,10 @@ def _build_import_record(document: dict[str, object]) -> ImportRecord:
         correction_model=document.get("correction_model"),
         ocr_error_message=document.get("ocr_error_message"),
         ocr_completed_at=document.get("ocr_completed_at"),
+        ocr_quality=document.get("ocr_quality"),
+        field_validation_issues=document.get("field_validation_issues")
+        if isinstance(document.get("field_validation_issues"), list)
+        else [],
         review_data=document.get("review_data"),
         pages=pages,
     )
@@ -246,9 +273,63 @@ def get_import(import_id: str, settings: Settings | None = None, *, refresh_ocr:
     document = get_imports_collection().find_one({"_id": import_id})
     if document is None:
         return None
+    active_settings = settings or load_settings()
     if refresh_ocr:
-        document = _refresh_existing_import_if_needed(document, settings or load_settings())
+        document = _refresh_existing_import_if_needed(document, active_settings)
+    else:
+        document = _refresh_tr_review_data_if_needed(document, active_settings)
     return _build_import_record(document)
+
+
+def _refresh_tr_review_data_if_needed(
+    document: dict[str, object],
+    settings: Settings,
+) -> dict[str, object]:
+    document_category = document.get("document_category")
+    if not is_tr_document_category(str(document_category or "")):
+        return document
+
+    pages = document.get("pages")
+    if not isinstance(pages, list) or not pages:
+        return document
+
+    stored_review_data = document.get("review_data")
+    stored_version = (
+        int(stored_review_data.get("version") or 0)
+        if isinstance(stored_review_data, dict)
+        else 0
+    )
+    has_vision_review = (
+        isinstance(stored_review_data, dict)
+        and isinstance(stored_review_data.get("visionFieldReview"), dict)
+    )
+    vision_can_run = settings.vision_ready and _vision_endpoint_connectivity_error(settings) is None
+    if stored_version >= TR_REVIEW_VERSION and (has_vision_review or not vision_can_run):
+        return document
+
+    review_pages = [dict(page) for page in pages if isinstance(page, dict)]
+    if not review_pages:
+        return document
+
+    review_data = _build_review_data(
+        review_pages,
+        settings,
+        document_category=str(document_category or ""),
+    )
+    updated_at = _utc_now()
+    get_imports_collection().update_one(
+        {"_id": document["_id"]},
+        {
+            "$set": {
+                "review_data": review_data,
+                "updated_at": updated_at,
+            }
+        },
+    )
+    refreshed = dict(document)
+    refreshed["review_data"] = review_data
+    refreshed["updated_at"] = updated_at
+    return refreshed
 
 
 def get_import_preview_path(import_id: str, page_number: int, *, cleaned: bool) -> Path | None:
@@ -442,7 +523,7 @@ def _strip_ocr_line_decorators(value: str) -> str:
 
 
 def _clean_case_header_value(value: str) -> str | None:
-    cleaned = _strip_ocr_line_decorators(value).strip(" :-–—\t")
+    cleaned = _strip_ocr_line_decorators(value).strip(" :-โ€“โ€”\t")
     if not cleaned:
         return None
     if not any(character.isdigit() for character in cleaned):
@@ -471,7 +552,7 @@ def _extract_case_header_value(
                     return value
 
         for next_line in lines[index + 1 : index + 4]:
-            if not next_line or "สำหรับศาล" in next_line:
+            if not next_line or "เธชเธณเธซเธฃเธฑเธเธจเธฒเธฅ" in next_line:
                 continue
             if _line_contains_case_marker(next_line, CASE_HEADER_MARKERS):
                 break
@@ -496,11 +577,11 @@ def _normalize_case_header_ocr(header_markdown: str) -> str | None:
     if not black_no and not red_no:
         return None
 
-    header_lines = ["## ข้อมูลหัวกระดาษหน้าแรก"]
+    header_lines = ["## เธเนเธญเธกเธนเธฅเธซเธฑเธงเธเธฃเธฐเธ”เธฒเธฉเธซเธเนเธฒเนเธฃเธ"]
     if black_no:
-        header_lines.append(f"คดีหมายเลขดำที่ {black_no}")
+        header_lines.append(f"เธเธ”เธตเธซเธกเธฒเธขเน€เธฅเธเธ”เธณเธ—เธตเน {black_no}")
     if red_no:
-        header_lines.append(f"คดีหมายเลขแดงที่ {red_no}")
+        header_lines.append(f"เธเธ”เธตเธซเธกเธฒเธขเน€เธฅเธเนเธ”เธเธ—เธตเน {red_no}")
     return "\n".join(header_lines)
 
 
@@ -777,12 +858,12 @@ def _slice_review_text_to_end_marker(
 
 def _repair_judgment_display_spacing(text: str) -> str:
     replacements: tuple[tuple[re.Pattern[str], str], ...] = (
-        (re.compile(r"เป\s*็\s*นต้นไป"), "เป็นต้นไป"),
-        (re.compile(r"ค่าใช้\s*จ่า\s*ย"), "ค่าใช้จ่าย"),
-        (re.compile(r"ค่าใช้จ่ายในการ\s*ดำเนิน\s*คดี"), "ค่าใช้จ่ายในการดำเนินคดี"),
-        (re.compile(r"ขาด\s+ประโยชน์"), "ขาดประโยชน์"),
-        (re.compile(r"ส่ว\s+นค่า"), "ส่วนค่า"),
-        (re.compile(r"([0-9๐-๙]),\s+([0-9๐-๙])"), r"\1,\2"),
+        (re.compile(r"เน€เธ\s*เน\s*เธเธ•เนเธเนเธ"), "เน€เธเนเธเธ•เนเธเนเธ"),
+        (re.compile(r"เธเนเธฒเนเธเน\s*เธเนเธฒ\s*เธข"), "เธเนเธฒเนเธเนเธเนเธฒเธข"),
+        (re.compile(r"เธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธเธฒเธฃ\s*เธ”เธณเน€เธเธดเธ\s*เธเธ”เธต"), "เธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธเธฒเธฃเธ”เธณเน€เธเธดเธเธเธ”เธต"),
+        (re.compile(r"เธเธฒเธ”\s+เธเธฃเธฐเนเธขเธเธเน"), "เธเธฒเธ”เธเธฃเธฐเนเธขเธเธเน"),
+        (re.compile(r"เธชเนเธง\s+เธเธเนเธฒ"), "เธชเนเธงเธเธเนเธฒ"),
+        (re.compile(r"([0-9เน-เน]),\s+([0-9เน-เน])"), r"\1,\2"),
     )
     repaired_text = text
     for pattern, replacement in replacements:
@@ -797,18 +878,18 @@ def _normalize_judgment_end_marker(text: str) -> str:
 
     replacements: tuple[tuple[re.Pattern[str], str], ...] = (
         (
-            re.compile(r"ค่าใช้จ่ายในการ\s*ดำเนิน\s*คดี\s*ให้\s*เป\s*็\s*[นบ]\s*พับ\s*(?:\./|\.|/)?\s*$"),
-            "ค่าใช้จ่ายในการดำเนินคดีให้เป็นพับ./",
+            re.compile(r"เธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธเธฒเธฃ\s*เธ”เธณเน€เธเธดเธ\s*เธเธ”เธต\s*เนเธซเน\s*เน€เธ\s*เน\s*[เธเธ]\s*เธเธฑเธ\s*(?:\./|\.|/)?\s*$"),
+            "เธเนเธฒเนเธเนเธเนเธฒเธขเนเธเธเธฒเธฃเธ”เธณเน€เธเธดเธเธเธ”เธตเนเธซเนเน€เธเนเธเธเธฑเธ./",
         ),
         (
-            re.compile(r"ให้\s*เป\s*็\s*[นบ]\s*พับ\s*(?:\./|\.|/)?\s*$"),
-            "ให้เป็นพับ./",
+            re.compile(r"เนเธซเน\s*เน€เธ\s*เน\s*[เธเธ]\s*เธเธฑเธ\s*(?:\./|\.|/)?\s*$"),
+            "เนเธซเนเน€เธเนเธเธเธฑเธ./",
         ),
         (
-            re.compile(r"เป\s*็\s*[นบ]\s*พับ\s*(?:\./|\.|/)?\s*$"),
-            "เป็นพับ./",
+            re.compile(r"เน€เธ\s*เน\s*[เธเธ]\s*เธเธฑเธ\s*(?:\./|\.|/)?\s*$"),
+            "เน€เธเนเธเธเธฑเธ./",
         ),
-        (re.compile(r"พับ\s*\./\s*$"), "พับ./"),
+        (re.compile(r"เธเธฑเธ\s*\./\s*$"), "เธเธฑเธ./"),
     )
     for pattern, replacement in replacements:
         next_text = pattern.sub(replacement, normalized_text)
@@ -827,11 +908,11 @@ def _strip_review_page_noise_lines(text: str) -> str:
         compact_line = _compact_for_compare(line)
         if lower_line.startswith("<page_number"):
             continue
-        if compact_line in {"สำหรับ", "ศาลใช้", "สำหรับศาลใช้"}:
+        if compact_line in {"เธชเธณเธซเธฃเธฑเธ", "เธจเธฒเธฅเนเธเน", "เธชเธณเธซเธฃเธฑเธเธจเธฒเธฅเนเธเน"}:
             continue
-        if re.fullmatch(r"\(?[0-9๐-๙]+\s*พ\.\)?", line):
+        if re.fullmatch(r"\(?[0-9เน-เน]+\s*เธ\.\)?", line):
             continue
-        if re.fullmatch(r"-?\s*[0-9๐-๙]+\s*-?", line):
+        if re.fullmatch(r"-?\s*[0-9เน-เน]+\s*-?", line):
             continue
         kept_lines.append(line)
     return "\n".join(kept_lines)
@@ -841,7 +922,7 @@ def _build_judgment_display_text_from_page(page: dict[str, object]) -> str:
     page_text = _strip_review_page_noise_lines(_get_page_text_for_review(page))
     display_text = _slice_review_text_between_keywords(
         page_text,
-        start_keywords=("พิพากษาให้จำเลย", "พิพากษาให้จำเลบย"),
+        start_keywords=("เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธข", "เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธเธข"),
         end_keywords=JUDGMENT_END_KEYWORDS,
         fallback_end_keywords=JUDGMENT_OCR_FALLBACK_END_MARKERS,
     )
@@ -852,7 +933,7 @@ def _build_judgment_continuation_display_text_from_page(page: dict[str, object])
     page_text = _strip_review_page_noise_lines(_get_page_text_for_review(page))
     page_text = _normalize_review_text(page_text)
     page_text = re.sub(
-        r"^\s*/?\s*[0-9๐-๙]{2,4}\)?\s+(?=เป\s*็?นต้นไป|เป็นต้นไป)",
+        r"^\s*/?\s*[0-9เน-เน]{2,4}\)?\s+(?=เน€เธ\s*เน?เธเธ•เนเธเนเธ|เน€เธเนเธเธ•เนเธเนเธ)",
         "",
         page_text,
     )
@@ -883,11 +964,11 @@ def _pick_pay_amount(value: str) -> str | None:
     return _pick_first_pattern(
         value,
         [
-            re.compile(r"พิพากษาให้จำเลย(?:ที่\s*[0-9๐-๙]+)?\s*ชำระเงิน(?:เป็น)?\s*จำนวน\s*([0-9๐-๙,\.]+)"),
-            re.compile(r"พิพากษาให้จำเลย(?:ที่\s*[0-9๐-๙]+)?\s*ชำระเงิน\s*([0-9๐-๙,\.]+)"),
-            re.compile(r"ชำระเงิน(?:เป็น)?\s*จำนวน\s*([0-9๐-๙,\.]+)"),
-            re.compile(r"คืนไม่ได้ให้ใช้ราคาแทนเป็นเงิน(?:จำนวน)?\s*([0-9๐-๙,\.]+)"),
-            re.compile(r"ใช้ราคาแทนเป็นเงิน(?:จำนวน)?\s*([0-9๐-๙,\.]+)"),
+            re.compile(r"เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธข(?:เธ—เธตเน\s*[0-9เน-เน]+)?\s*เธเธณเธฃเธฐเน€เธเธดเธ(?:เน€เธเนเธ)?\s*เธเธณเธเธงเธ\s*([0-9เน-เน,\.]+)"),
+            re.compile(r"เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธข(?:เธ—เธตเน\s*[0-9เน-เน]+)?\s*เธเธณเธฃเธฐเน€เธเธดเธ\s*([0-9เน-เน,\.]+)"),
+            re.compile(r"เธเธณเธฃเธฐเน€เธเธดเธ(?:เน€เธเนเธ)?\s*เธเธณเธเธงเธ\s*([0-9เน-เน,\.]+)"),
+            re.compile(r"เธเธทเธเนเธกเนเนเธ”เนเนเธซเนเนเธเนเธฃเธฒเธเธฒเนเธ—เธเน€เธเนเธเน€เธเธดเธ(?:เธเธณเธเธงเธ)?\s*([0-9เน-เน,\.]+)"),
+            re.compile(r"เนเธเนเธฃเธฒเธเธฒเนเธ—เธเน€เธเนเธเน€เธเธดเธ(?:เธเธณเธเธงเธ)?\s*([0-9เน-เน,\.]+)"),
         ],
     )
 
@@ -903,10 +984,10 @@ def _pick_filing_date(value: str) -> str | None:
     raw_date = _pick_first_pattern(
         value,
         [
-            re.compile(r"(?:ฟ้อง|พ้อง)วันที่\s*([0-9๐-๙]+\s+\S+\s+[0-9๐-๙]+)"),
-            re.compile(r"(?:ฟ้อง|พ้อง)วันที่\s*([0-9๐-๙]+\s+\S+\s+[0-9๐-๙]+\s*\(?[0-9๐-๙]*\)?)"),
-            re.compile(r"วันฟ้อง\s*\(?\s*วันที่\s*([0-9๐-๙]+\s+\S+\s+[0-9๐-๙]+)"),
-            re.compile(r"วันฟ้อง\s*\(?\s*วันที่\s*([0-9๐-๙]+\s+\S+\s+[0-9๐-๙]+\s*\)?[0-9๐-๙]*)"),
+            re.compile(r"(?:เธเนเธญเธ|เธเนเธญเธ)เธงเธฑเธเธ—เธตเน\s*([0-9เน-เน]+\s+\S+\s+[0-9เน-เน]+)"),
+            re.compile(r"(?:เธเนเธญเธ|เธเนเธญเธ)เธงเธฑเธเธ—เธตเน\s*([0-9เน-เน]+\s+\S+\s+[0-9เน-เน]+\s*\(?[0-9เน-เน]*\)?)"),
+            re.compile(r"เธงเธฑเธเธเนเธญเธ\s*\(?\s*เธงเธฑเธเธ—เธตเน\s*([0-9เน-เน]+\s+\S+\s+[0-9เน-เน]+)"),
+            re.compile(r"เธงเธฑเธเธเนเธญเธ\s*\(?\s*เธงเธฑเธเธ—เธตเน\s*([0-9เน-เน]+\s+\S+\s+[0-9เน-เน]+\s*\)?[0-9เน-เน]*)"),
         ],
     )
     return _normalize_review_date(raw_date)
@@ -918,7 +999,7 @@ def _normalize_ocr_number_token(value: str | None) -> str | None:
 
     normalized = (
         value.replace(" ", "")
-        .replace("ด", "๑")
+        .replace("เธ”", "เน‘")
         .replace("I", "1")
         .replace("l", "1")
         .replace("O", "0")
@@ -949,14 +1030,14 @@ def _looks_like_case_number(value: str | None) -> bool:
 
 def _restore_missing_case_series_letter(value: str) -> str:
     compact = value.replace(" ", "")
-    if re.match(r"^ผูE[0-9๐-๙]", compact):
-        return "ผบE" + compact[3:]
-    if re.match(r"^ผE[0-9๐-๙]", compact):
-        return "ผบE" + compact[2:]
-    if re.match(r"^ผู[0-9๐-๙]", compact):
-        return "ผบE" + compact[2:]
-    if re.match(r"^ผบ[0-9๐-๙]", compact):
-        return "ผบE" + compact[2:]
+    if re.match(r"^เธเธนE[0-9เน-เน]", compact):
+        return "เธเธE" + compact[3:]
+    if re.match(r"^เธE[0-9เน-เน]", compact):
+        return "เธเธE" + compact[2:]
+    if re.match(r"^เธเธน[0-9เน-เน]", compact):
+        return "เธเธE" + compact[2:]
+    if re.match(r"^เธเธ[0-9เน-เน]", compact):
+        return "เธเธE" + compact[2:]
     return value
 
 
@@ -966,7 +1047,7 @@ def _case_number_missing_series_letter(value: str | None) -> bool:
     normalized = (_decode_latin1_cp874_mojibake(value) or value).replace(" ", "")
     for marker in CASE_HEADER_MARKERS:
         normalized = normalized.replace(marker.replace(" ", ""), "")
-    return bool(re.match(r"^ผบ[0-9๐-๙]", normalized))
+    return bool(re.match(r"^เธเธ[0-9เน-เน]", normalized))
 
 
 def _values_compatible(left: str | None, right: str | None) -> bool:
@@ -983,7 +1064,7 @@ def _extract_court_name_from_markdown(markdown: str) -> str | None:
     for raw_line in markdown.splitlines():
         line = _strip_ocr_line_decorators(raw_line).strip(" :-\t")
         compact = _compact_for_compare(line)
-        if not line or not compact.startswith("ศาล"):
+        if not line or not compact.startswith("เธจเธฒเธฅ"):
             continue
         if len(line) > 80:
             continue
@@ -1172,12 +1253,12 @@ def _choose_court_anchor_line_by_text(
     for line in lines:
         line_text = _strip_ocr_line_decorators(line.text)
         compact_text = _compact_for_compare(line_text)
-        if not compact_text or "สำหรับ" in compact_text:
+        if not compact_text or "เธชเธณเธซเธฃเธฑเธ" in compact_text:
             continue
         if target and (target in compact_text or compact_text in target):
             candidates.append(line)
             continue
-        if compact_text.startswith("ศาล"):
+        if compact_text.startswith("เธจเธฒเธฅ"):
             candidates.append(line)
 
     if not candidates:
@@ -1432,14 +1513,14 @@ def _extract_case_number_like_value(text: str | None) -> str | None:
 
     compact_text = _decode_latin1_cp874_mojibake(text) or text
     compact_text = compact_text.replace(" ", "")
-    for token in re.findall(r"[A-Za-zก-๛0-9๐-๙./-]+", compact_text):
+    for token in re.findall(r"[A-Za-zเธ-เน0-9เน-เน./-]+", compact_text):
         normalized = token.strip(".,;:-/")
-        if "ผบ" in normalized and not normalized.startswith("ผบ"):
-            normalized = normalized[normalized.find("ผบ") :]
-        elif "พบ" in normalized and not normalized.startswith("พบ"):
-            normalized = normalized[normalized.find("พบ") :]
-        if normalized.startswith("พบ"):
-            normalized = "ผบ" + normalized[2:]
+        if "เธเธ" in normalized and not normalized.startswith("เธเธ"):
+            normalized = normalized[normalized.find("เธเธ") :]
+        elif "เธเธ" in normalized and not normalized.startswith("เธเธ"):
+            normalized = normalized[normalized.find("เธเธ") :]
+        if normalized.startswith("เธเธ"):
+            normalized = "เธเธ" + normalized[2:]
         if _looks_like_case_number(normalized):
             return normalized
     return None
@@ -1474,14 +1555,14 @@ def _score_case_number_candidate(value: str) -> float:
     score = 0.0
     compact = value.replace(" ", "")
     slash_count = compact.count("/")
-    thai_digit_count = sum(1 for character in compact if "๐" <= character <= "๙")
-    ascii_digit_count = sum(1 for character in compact if character.isdigit() and not ("๐" <= character <= "๙"))
+    thai_digit_count = sum(1 for character in compact if "เน" <= character <= "เน")
+    ascii_digit_count = sum(1 for character in compact if character.isdigit() and not ("เน" <= character <= "เน"))
 
-    if compact.startswith("ผบ"):
+    if compact.startswith("เธเธ"):
         score += 3.0
-    if compact.startswith("ผบ."):
+    if compact.startswith("เธเธ."):
         score += 0.5
-    if "ศต" in compact:
+    if "เธจเธ•" in compact:
         score += 1.0
     if "E" in compact:
         score += 0.8
@@ -1493,11 +1574,11 @@ def _score_case_number_candidate(value: str) -> float:
         score += 2.0
     if ascii_digit_count > 0:
         score -= 0.4
-    if re.search(r"/๒๕[0-9๐-๙]{2}$", compact):
+    if re.search(r"/เน’เน•[0-9เน-เน]{2}$", compact):
         score += 3.5
     if re.search(r"/25[0-9]{2}$", compact):
         score += 2.5
-    if "." in compact and "ผบ" not in compact[:4]:
+    if "." in compact and "เธเธ" not in compact[:4]:
         score -= 1.2
     if len(compact) < 8 or len(compact) > 22:
         score -= 1.5
@@ -1694,7 +1775,7 @@ def _normalize_header_field_value(
             return None
     elif field_key == "courtName":
         normalized = normalized.replace(" ", "")
-        if "ศาล" not in normalized:
+        if "เธจเธฒเธฅ" not in normalized:
             return None
 
     return normalized
@@ -1767,7 +1848,7 @@ def _extract_single_case_field_with_vision_crop(
     return {
         "value": normalized_value,
         "bbox": list(crop_bounds),
-        "source": "qwen_header_crop",
+        "source": "vision_header_crop",
     }, errors
 
 
@@ -2008,7 +2089,7 @@ def _resolve_first_page_case_fields(
                     field_key=field_key,
                     value=str(vision_field.get("value") or "").strip() or None,
                     bbox=vision_field.get("bbox"),
-                    source=f"{vision_field.get('source') or 'qwen_header_crop'}_{preview_source}",
+                    source=f"{vision_field.get('source') or 'vision_header_crop'}_{preview_source}",
                     method="vision_crop",
                     preview_source=preview_source,
                 )
@@ -2068,7 +2149,7 @@ def _extract_court_field_with_vision_crop(
         "courtName": {
             "value": value,
             "bbox": _map_crop_bbox_to_page(vision_bbox, crop_bounds) if vision_bbox is not None else None,
-            "source": "qwen_court_crop",
+            "source": "vision_court_crop",
         }
     }, errors
 
@@ -2200,7 +2281,7 @@ def _extract_attorney_fee_with_vision_crop(
             prompt=(
                 "Read this Thai court judgment crop. "
                 "Return JSON only in exactly this shape: {\"attorney_fee\":string|null}. "
-                "Extract only the attorney fee amount after the phrase ค่าทนายความ. "
+                "Extract only the attorney fee amount after the phrase เธเนเธฒเธ—เธเธฒเธขเธเธงเธฒเธก. "
                 "Preserve Thai digits and punctuation. If not visible, use null."
             ),
             settings=settings,
@@ -2212,7 +2293,7 @@ def _extract_attorney_fee_with_vision_crop(
     if not isinstance(raw_value, str) or not raw_value.strip():
         return None
 
-    normalized_value = _normalize_ocr_number_token(raw_value.replace("บาท", "").strip())
+    normalized_value = _normalize_ocr_number_token(raw_value.replace("เธเธฒเธ—", "").strip())
     return normalized_value or None
 
 
@@ -2291,7 +2372,7 @@ def _build_judgment_hit_from_page(page: dict[str, object]) -> dict[str, object] 
     raw_display_text = _build_judgment_display_text_from_page(page)
     display_text = (
         raw_display_text
-        if _contains_any_review_keyword(raw_display_text, ("พิพากษาให้จำเลย", "พิพากษาให้จำเลบย"))
+        if _contains_any_review_keyword(raw_display_text, ("เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธข", "เธเธดเธเธฒเธเธฉเธฒเนเธซเนเธเธณเน€เธฅเธเธข"))
         else segment_display_text
     )
     if not display_text:
@@ -2320,11 +2401,11 @@ def _is_judgment_continuation_noise(segment_text: str) -> bool:
     compact_text = _compact_for_compare(normalized_text)
     if not compact_text:
         return True
-    if compact_text in {"สำหรับ", "ศาลใช้", "สำหรับศาลใช้"}:
+    if compact_text in {"เธชเธณเธซเธฃเธฑเธ", "เธจเธฒเธฅเนเธเน", "เธชเธณเธซเธฃเธฑเธเธจเธฒเธฅเนเธเน"}:
         return True
-    if re.fullmatch(r"\(?[0-9๐-๙]+\s*พ\.\)?", normalized_text):
+    if re.fullmatch(r"\(?[0-9เน-เน]+\s*เธ\.\)?", normalized_text):
         return True
-    if re.fullmatch(r"[0-9๐-๙]+\)", normalized_text):
+    if re.fullmatch(r"[0-9เน-เน]+\)", normalized_text):
         return True
     return False
 
@@ -2452,6 +2533,314 @@ def _get_review_hit_page(hit: dict[str, object] | None) -> int | None:
     return page_number if isinstance(page_number, int) else None
 
 
+def _load_page_image_from_field(page: dict[str, object], field_name: str) -> Image.Image | None:
+    value = page.get(field_name)
+    if not isinstance(value, str):
+        return None
+    path = Path(value)
+    if not path.exists():
+        return None
+    try:
+        with Image.open(path) as image:
+            return image.convert("RGB")
+    except Exception:
+        return None
+
+
+def _crop_tr_field(
+    image: Image.Image,
+    bbox: tuple[float, float, float, float],
+    *,
+    padding: float = 0.018,
+) -> Image.Image:
+    width, height = image.size
+    left, top, right, bottom = bbox
+    left_px = max(0, int((left - padding) * width))
+    top_px = max(0, int((top - padding) * height))
+    right_px = min(width, int((right + padding) * width))
+    bottom_px = min(height, int((bottom + padding) * height))
+    crop = image.crop((left_px, top_px, max(right_px, left_px + 1), max(bottom_px, top_px + 1)))
+    scale = max(1.0, 900 / max(crop.width, 1), 180 / max(crop.height, 1))
+    if scale > 1.0:
+        crop = crop.resize(
+            (int(crop.width * scale), int(crop.height * scale)),
+            Image.Resampling.LANCZOS,
+        )
+    return crop
+
+
+def _vision_bbox_for_tr_field(field_name: str) -> tuple[float, float, float, float] | None:
+    override = TR_VISION_LOCKED_BBOX_OVERRIDES.get(field_name)
+    if override is not None:
+        return override
+    template = get_tr_field_template(field_name)
+    return template.bbox if template is not None else None
+
+
+def _vision_crop_padding_for_tr_field(field_name: str) -> float:
+    return 0.003 if field_name != "address" else 0.006
+
+
+def _normalize_tr_vision_value(field_name: str, value: object) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized or normalized.lower() in {"null", "none", "unknown", "not visible"}:
+        return None
+    if normalized in {"-", "#", "##########"}:
+        return None
+    return normalize_tr_field_value(field_name, re.sub(r"\s+", " ", normalized))
+
+
+def _should_use_tr_vision_field(
+    fields: dict[str, object],
+    field_name: str,
+) -> bool:
+    field = fields.get(field_name)
+    current_value = (
+        str(field.get("value") or "").strip()
+        if isinstance(field, dict)
+        else ""
+    )
+    if field_name in TR_VISION_VERIFY_FIELD_KEYS:
+        return True
+    return not validate_tr_field_value(field_name, current_value)
+
+
+def _should_accept_tr_vision_value(
+    *,
+    field_name: str,
+    current_value: str,
+    vision_value: str,
+) -> bool:
+    if field_name in TR_VISION_PARENT_NAME_FIELDS and len(vision_value.split()) > 1:
+        return False
+    if current_value and len(vision_value.split()) > len(current_value.split()):
+        current_prefix = " ".join(vision_value.split()[: len(current_value.split())])
+        if current_prefix == current_value:
+            return False
+    return True
+
+
+def _compact_tr_compare_value(value: str | None) -> str:
+    return re.sub(r"\s+", "", str(value or ""))
+
+
+def _read_tr_field_with_vision(
+    *,
+    field_name: str,
+    source_images: list[tuple[str, Image.Image]],
+    settings: Settings,
+) -> tuple[str | None, str | None]:
+    bbox = _vision_bbox_for_tr_field(field_name)
+    if bbox is None:
+        return None, "field has no configured crop"
+
+    prompt = (
+        "You are reading one cropped field from a Thai TR fixed-layout form.\n"
+        f"Field key: {field_name}\n"
+        f"Field instruction: {TR_VISION_FIELD_HINTS.get(field_name, 'Read only the visible field value.')}\n"
+        "The crop is a locked field slot. Read only text inside this one field slot. "
+        "Never copy text from adjacent rows or columns. "
+        "Return only JSON in this exact shape: {\"value\": string|null}.\n"
+        "For Thai names, pay close attention to upper/lower vowels, tone marks, and similar letters. "
+        "Do not normalize, romanize, autocorrect, or rewrite the name. "
+        "Read the Thai characters exactly as visible. Do not guess. "
+        "Do not include labels, explanations, surrounding fields, or markdown."
+    )
+
+    errors: list[str] = []
+    for source_label, source_image in source_images:
+        crop = _crop_tr_field(
+            source_image,
+            bbox,
+            padding=_vision_crop_padding_for_tr_field(field_name),
+        )
+        try:
+            payload = run_vision_json(image=crop, prompt=prompt, settings=settings)
+        except Exception as exc:
+            errors.append(f"{source_label}: {exc}")
+            continue
+
+        value = _normalize_tr_vision_value(field_name, payload.get("value"))
+        if validate_tr_field_value(field_name, value):
+            return value, source_label
+        if value:
+            errors.append(f"{source_label}: invalid value {value}")
+
+    return None, " | ".join(errors) if errors else "no vision value returned"
+
+
+def _verify_tr_field_candidate_with_vision(
+    *,
+    field_name: str,
+    current_value: str,
+    source_images: list[tuple[str, Image.Image]],
+    settings: Settings,
+) -> tuple[str, str | None, str | None, str | None]:
+    if not current_value:
+        value, source = _read_tr_field_with_vision(
+            field_name=field_name,
+            source_images=source_images,
+            settings=settings,
+        )
+        return ("rescued" if value else "uncertain", value, source, "missing OCR candidate")
+
+    bbox = _vision_bbox_for_tr_field(field_name)
+    if bbox is None:
+        return "uncertain", None, None, "field has no configured crop"
+
+    prompt = (
+        "You are verifying one cropped field from the original Thai TR form image.\n"
+        f"Field key: {field_name}\n"
+        f"Field instruction: {TR_VISION_FIELD_HINTS.get(field_name, 'Read only the visible field value.')}\n"
+        f"OCR candidate: {json.dumps(current_value, ensure_ascii=False)}\n"
+        "Look only at this crop. Check whether the OCR candidate is exactly correct, "
+        "including Thai upper/lower vowels, tone marks, and similar letters.\n"
+        "If the candidate is exactly correct, return status \"correct\" and corrected_value null.\n"
+        "If it is wrong and the exact visible value is clear, return status \"incorrect\" and corrected_value.\n"
+        "If it is not clear, return status \"uncertain\" and corrected_value null.\n"
+        "Never copy text from adjacent rows or columns. Do not normalize, romanize, or guess.\n"
+        "Return only JSON in this exact shape: "
+        "{\"status\":\"correct|incorrect|uncertain\",\"corrected_value\":string|null,\"reason\":string}."
+    )
+
+    errors: list[str] = []
+    for source_label, source_image in source_images:
+        crop = _crop_tr_field(
+            source_image,
+            bbox,
+            padding=_vision_crop_padding_for_tr_field(field_name),
+        )
+        try:
+            payload = run_vision_json(image=crop, prompt=prompt, settings=settings)
+        except Exception as exc:
+            errors.append(f"{source_label}: {exc}")
+            continue
+
+        raw_status = str(payload.get("status") or "").strip().lower()
+        reason = str(payload.get("reason") or "").strip() or None
+        corrected_value = _normalize_tr_vision_value(field_name, payload.get("corrected_value"))
+        if raw_status == "correct":
+            if field_name in TR_VISION_NAME_FIELD_KEYS:
+                independent_value, independent_source = _read_tr_field_with_vision(
+                    field_name=field_name,
+                    source_images=source_images,
+                    settings=settings,
+                )
+                if (
+                    validate_tr_field_value(field_name, independent_value)
+                    and _compact_tr_compare_value(independent_value)
+                    != _compact_tr_compare_value(current_value)
+                ):
+                    return (
+                        "uncertain",
+                        None,
+                        source_label,
+                        "candidate-free vision read disagreed "
+                        f"({independent_value} from {independent_source or 'vision_field_read'})",
+                    )
+            return "correct", current_value, source_label, reason
+        if raw_status == "incorrect" and validate_tr_field_value(field_name, corrected_value):
+            return "incorrect", corrected_value, source_label, reason
+        if raw_status == "uncertain":
+            return "uncertain", None, source_label, reason
+        if validate_tr_field_value(field_name, corrected_value):
+            return "incorrect", corrected_value, source_label, reason or "Vision returned a corrected value"
+
+        errors.append(f"{source_label}: invalid verification payload {payload}")
+
+    return "uncertain", None, None, " | ".join(errors) if errors else "no vision verification returned"
+
+
+def _apply_tr_vision_field_verification(
+    review_data: dict[str, object],
+    pages: list[dict[str, object]],
+    settings: Settings,
+) -> dict[str, object]:
+    if not settings.vision_ready or _vision_endpoint_connectivity_error(settings) is not None:
+        return review_data
+
+    sorted_pages = sorted(pages, key=lambda page: int(page.get("page_number", 0)))
+    first_page = sorted_pages[0] if sorted_pages else None
+    if first_page is None:
+        return review_data
+
+    source_images: list[tuple[str, Image.Image]] = []
+    original_image = _load_page_image_from_field(first_page, "original_preview_path")
+    if original_image is not None:
+        source_images.append(("vision_original_verify", original_image))
+    cleaned_image = _load_page_image_from_field(first_page, "cleaned_preview_path")
+    if cleaned_image is not None:
+        source_images.append(("vision_cleaned_verify", cleaned_image))
+    if not source_images:
+        return review_data
+
+    fields = review_data.get("fields")
+    if not isinstance(fields, dict):
+        return review_data
+
+    verified: list[dict[str, str]] = []
+    errors: list[str] = []
+    for field_name in TR_VISION_FIELD_KEYS:
+        field = fields.get(field_name)
+        current_value = (
+            str(field.get("value") or "").strip()
+            if isinstance(field, dict)
+            else ""
+        )
+        status, value, source, reason = _verify_tr_field_candidate_with_vision(
+            field_name=field_name,
+            current_value=current_value,
+            source_images=source_images,
+            settings=settings,
+        )
+        if status == "correct":
+            verified.append(
+                {
+                    "field": field_name,
+                    "source": source or "vision_field_verify",
+                    "action": "confirmed",
+                    "status": status,
+                }
+            )
+            continue
+        if value is None:
+            errors.append(f"{field_name}: vision verification {status} ({reason or source or 'no corrected value'})")
+            continue
+        if not _should_accept_tr_vision_value(
+            field_name=field_name,
+            current_value=current_value,
+            vision_value=value,
+        ):
+            errors.append(f"{field_name}: vision value looked like it included neighboring text ({value})")
+            continue
+
+        template = get_tr_field_template(field_name)
+        if not isinstance(field, dict):
+            field = {}
+            fields[field_name] = field
+        field["value"] = value
+        field["pageNumber"] = template.page_number if template is not None else 1
+        field["bbox"] = list(template.bbox) if template is not None and template.bbox is not None else None
+        field["source"] = source or "vision_field_verify"
+        verified.append(
+            {
+                "field": field_name,
+                "source": source or "vision_field_verify",
+                "action": "corrected" if current_value else "rescued",
+                "status": status,
+            }
+        )
+
+    if verified or errors:
+        review_data["visionFieldReview"] = {
+            "verifiedFields": verified,
+            "errors": errors,
+        }
+    return review_data
+
+
 def _build_review_data(
     pages: list[dict[str, object]],
     settings: Settings,
@@ -2459,7 +2848,8 @@ def _build_review_data(
     document_category: str | None = None,
 ) -> dict[str, object]:
     if is_tr_document_category(document_category):
-        return build_tr_review_data(pages)
+        review_data = build_tr_review_data(pages)
+        return _apply_tr_vision_field_verification(review_data, pages, settings)
 
     sorted_pages = sorted(pages, key=lambda page: int(page.get("page_number", 0)))
     first_page = sorted_pages[0] if sorted_pages else None
@@ -2496,19 +2886,19 @@ def _build_review_data(
     interest_rate = _pick_first_pattern(
         full_text,
         [
-            re.compile(r"อัตราร้อยละ\s*([0-9๐-๙,\.]+)"),
-            re.compile(r"รายละเอียด\s*([0-9๐-๙,\.]+)\s*ต่อปี"),
-            re.compile(r"([0-9๐-๙,\.]+)\s*ต่อปี"),
+            re.compile(r"เธญเธฑเธ•เธฃเธฒเธฃเนเธญเธขเธฅเธฐ\s*([0-9เน-เน,\.]+)"),
+            re.compile(r"เธฃเธฒเธขเธฅเธฐเน€เธญเธตเธขเธ”\s*([0-9เน-เน,\.]+)\s*เธ•เนเธญเธเธต"),
+            re.compile(r"([0-9เน-เน,\.]+)\s*เธ•เนเธญเธเธต"),
         ],
     )
     principal_amount = _pick_first_pattern(
         full_text,
-        [re.compile(r"(?:ของต้นเงิน|ของเงินต้น)\s*([0-9๐-๙ด,\.]+)")],
+        [re.compile(r"(?:เธเธญเธเธ•เนเธเน€เธเธดเธ|เธเธญเธเน€เธเธดเธเธ•เนเธ)\s*([0-9เน-เนเธ”,\.]+)")],
     )
     filing_date = _pick_filing_date(full_text)
     attorney_fee = _pick_first_pattern(
         full_text,
-        [re.compile(r"ค่าทนายความ\s*[\/\\|]?\s*([0-9๐-๙,\.]+)")],
+        [re.compile(r"เธเนเธฒเธ—เธเธฒเธขเธเธงเธฒเธก\s*[\/\\|]?\s*([0-9เน-เน,\.]+)")],
     )
 
     vision_fields: dict[str, dict[str, object]] = {}
@@ -2538,12 +2928,12 @@ def _build_review_data(
 
     pay_amount_hit = _find_judgment_hit_by_keywords(
         judgment_hits,
-        ("ชำระเงิน", "ใช้ราคาแทนเป็นเงิน", "ราคาแทน"),
+        ("เธเธณเธฃเธฐเน€เธเธดเธ", "เนเธเนเธฃเธฒเธเธฒเนเธ—เธเน€เธเนเธเน€เธเธดเธ", "เธฃเธฒเธเธฒเนเธ—เธ"),
     )
-    interest_rate_hit = _find_judgment_hit_by_keywords(judgment_hits, ("ดอกเบี้ย", "ร้อยละ"))
-    principal_amount_hit = _find_judgment_hit_by_keywords(judgment_hits, ("ต้นเงิน", "เงินต้น"))
-    filing_date_hit = _find_judgment_hit_by_keywords(judgment_hits, ("วันฟ้อง", "ฟ้องวันที่", "พ้องวันที่"))
-    attorney_fee_hit = _find_judgment_hit_by_keywords(judgment_hits, ("ค่าทนายความ",))
+    interest_rate_hit = _find_judgment_hit_by_keywords(judgment_hits, ("เธ”เธญเธเน€เธเธตเนเธข", "เธฃเนเธญเธขเธฅเธฐ"))
+    principal_amount_hit = _find_judgment_hit_by_keywords(judgment_hits, ("เธ•เนเธเน€เธเธดเธ", "เน€เธเธดเธเธ•เนเธ"))
+    filing_date_hit = _find_judgment_hit_by_keywords(judgment_hits, ("เธงเธฑเธเธเนเธญเธ", "เธเนเธญเธเธงเธฑเธเธ—เธตเน", "เธเนเธญเธเธงเธฑเธเธ—เธตเน"))
+    attorney_fee_hit = _find_judgment_hit_by_keywords(judgment_hits, ("เธเนเธฒเธ—เธเธฒเธขเธเธงเธฒเธก",))
     primary_hit_text = (
         _normalize_review_text(" ".join(str(hit.get("text") or "") for hit in judgment_hits))
         if judgment_hits
@@ -2556,22 +2946,22 @@ def _build_review_data(
             interest_rate = _pick_first_pattern(
                 primary_hit_text,
                 [
-                    re.compile(r"อัตราร้อยละ\s*([0-9๐-๙,\.]+)"),
-                    re.compile(r"รายละเอียด\s*([0-9๐-๙,\.]+)\s*ต่อปี"),
-                    re.compile(r"([0-9๐-๙,\.]+)\s*ต่อปี"),
+                    re.compile(r"เธญเธฑเธ•เธฃเธฒเธฃเนเธญเธขเธฅเธฐ\s*([0-9เน-เน,\.]+)"),
+                    re.compile(r"เธฃเธฒเธขเธฅเธฐเน€เธญเธตเธขเธ”\s*([0-9เน-เน,\.]+)\s*เธ•เนเธญเธเธต"),
+                    re.compile(r"([0-9เน-เน,\.]+)\s*เธ•เนเธญเธเธต"),
                 ],
             )
         if not principal_amount:
             principal_amount = _pick_first_pattern(
                 primary_hit_text,
-                [re.compile(r"(?:ของต้นเงิน|ของเงินต้น)\s*([0-9๐-๙ด,\.]+)")],
+                [re.compile(r"(?:เธเธญเธเธ•เนเธเน€เธเธดเธ|เธเธญเธเน€เธเธดเธเธ•เนเธ)\s*([0-9เน-เนเธ”,\.]+)")],
             )
         if not filing_date:
             filing_date = _pick_filing_date(primary_hit_text)
         if not attorney_fee:
             attorney_fee = _pick_first_pattern(
                 primary_hit_text,
-                [re.compile(r"ค่าทนายความ\s*[\/\\|]?\s*([0-9๐-๙,\.]+)")],
+                [re.compile(r"เธเนเธฒเธ—เธเธฒเธขเธเธงเธฒเธก\s*[\/\\|]?\s*([0-9เน-เน,\.]+)")],
             )
     if not attorney_fee and can_use_vision:
         for page in sorted_pages:
@@ -2611,7 +3001,7 @@ def _build_review_data(
         case_black_value,
     ):
         case_black_bbox = vision_fields["caseBlackNo"].get("bbox")
-        case_black_source = str(vision_fields["caseBlackNo"].get("source") or "qwen_header")
+        case_black_source = str(vision_fields["caseBlackNo"].get("source") or "vision_header")
     elif first_page is not None:
         case_black_bbox = _find_segment_anchor_by_value(first_page, case_black_value)
         if case_black_bbox is None:
@@ -2634,7 +3024,7 @@ def _build_review_data(
         case_red_value,
     ):
         case_red_bbox = vision_fields["caseRedNo"].get("bbox")
-        case_red_source = str(vision_fields["caseRedNo"].get("source") or "qwen_header")
+        case_red_source = str(vision_fields["caseRedNo"].get("source") or "vision_header")
     elif first_page is not None:
         case_red_bbox = _find_segment_anchor_by_value(first_page, case_red_value)
         if case_red_bbox is None:
@@ -2654,11 +3044,11 @@ def _build_review_data(
         )
     ):
         court_bbox = vision_fields["courtName"].get("bbox")
-        court_source = str(vision_fields["courtName"].get("source") or "qwen_header")
+        court_source = str(vision_fields["courtName"].get("source") or "vision_header")
     elif first_page is not None:
         court_bbox = _find_segment_anchor_by_value(first_page, court_name_value)
         if court_bbox is None:
-            court_bbox = _find_segment_anchor_by_keyword(first_page, ("ศาล",))
+            court_bbox = _find_segment_anchor_by_keyword(first_page, ("เธจเธฒเธฅ",))
         if court_bbox is None:
             court_bbox = FIRST_PAGE_FALLBACK_ANCHORS["courtName"]
             court_source = "fallback_header"
@@ -3032,97 +3422,74 @@ def _generate_import_ocr_payload(
         cleaned_ocr_path = cleaned_page_path if cleaned_page_path.exists() else cleaned_file_path
         page_failed = False
         try:
-            if is_tr_document_category(document_category):
-                raw_markdown = run_ocr_page(
-                    cleaned_ocr_path,
-                    page_number,
-                    settings,
-                    source_is_cleaned=True,
-                )
-                selected_source = "cleaned"
-                selected_score = None
-                selected_ocr_model = settings.ocr_model
-                selected_candidate_source = "cleaned"
-                ocr_candidate_scores = []
-                original_markdown = None
-                cleaned_markdown = raw_markdown
-                original_score = None
-                cleaned_score = None
-                original_error = None
-                cleaned_error = None
-                diff_similarity = None
-                suspicious_reasons = [
-                    "TR OCR used the category-specific cleaned image only, without rerunning the watermarked original.",
-                ]
-            else:
-                comparison = compare_ocr_page_sources(
-                    original_file_path=original_ocr_path,
-                    cleaned_file_path=cleaned_ocr_path,
-                    page_number=page_number,
-                    settings=settings,
-                )
-                raw_markdown = str(comparison.get("selected_markdown") or "")
-                selected_source = str(comparison.get("selected_source") or "cleaned")
-                selected_score = (
-                    float(comparison["selected_score"])
-                    if isinstance(comparison.get("selected_score"), (int, float))
-                    else None
-                )
-                selected_ocr_model = (
-                    str(comparison["selected_ocr_model"])
-                    if isinstance(comparison.get("selected_ocr_model"), str)
-                    else settings.ocr_model
-                )
-                selected_candidate_source = (
-                    str(comparison["selected_candidate_source"])
-                    if isinstance(comparison.get("selected_candidate_source"), str)
-                    else selected_source
-                )
-                ocr_candidate_scores = [
-                    dict(candidate)
-                    for candidate in comparison.get("candidate_scores", [])
-                    if isinstance(candidate, dict)
-                ]
-                original_markdown = (
-                    str(comparison["original_markdown"])
-                    if isinstance(comparison.get("original_markdown"), str)
-                    else None
-                )
-                cleaned_markdown = (
-                    str(comparison["cleaned_markdown"])
-                    if isinstance(comparison.get("cleaned_markdown"), str)
-                    else None
-                )
-                original_score = (
-                    float(comparison["original_score"])
-                    if isinstance(comparison.get("original_score"), (int, float))
-                    else None
-                )
-                cleaned_score = (
-                    float(comparison["cleaned_score"])
-                    if isinstance(comparison.get("cleaned_score"), (int, float))
-                    else None
-                )
-                original_error = (
-                    str(comparison["original_error"])
-                    if isinstance(comparison.get("original_error"), str)
-                    else None
-                )
-                cleaned_error = (
-                    str(comparison["cleaned_error"])
-                    if isinstance(comparison.get("cleaned_error"), str)
-                    else None
-                )
-                diff_similarity = (
-                    float(comparison["diff_similarity"])
-                    if isinstance(comparison.get("diff_similarity"), (int, float))
-                    else None
-                )
-                suspicious_reasons = [
-                    str(reason)
-                    for reason in comparison.get("suspicious_reasons", [])
-                    if isinstance(reason, str) and reason.strip()
-                ]
+            comparison = compare_ocr_page_sources(
+                original_file_path=original_ocr_path,
+                cleaned_file_path=cleaned_ocr_path,
+                page_number=page_number,
+                settings=settings,
+            )
+            raw_markdown = str(comparison.get("selected_markdown") or "")
+            selected_source = str(comparison.get("selected_source") or "cleaned")
+            selected_score = (
+                float(comparison["selected_score"])
+                if isinstance(comparison.get("selected_score"), (int, float))
+                else None
+            )
+            selected_ocr_model = (
+                str(comparison["selected_ocr_model"])
+                if isinstance(comparison.get("selected_ocr_model"), str)
+                else settings.ocr_model
+            )
+            selected_candidate_source = (
+                str(comparison["selected_candidate_source"])
+                if isinstance(comparison.get("selected_candidate_source"), str)
+                else selected_source
+            )
+            ocr_candidate_scores = [
+                dict(candidate)
+                for candidate in comparison.get("candidate_scores", [])
+                if isinstance(candidate, dict)
+            ]
+            original_markdown = (
+                str(comparison["original_markdown"])
+                if isinstance(comparison.get("original_markdown"), str)
+                else None
+            )
+            cleaned_markdown = (
+                str(comparison["cleaned_markdown"])
+                if isinstance(comparison.get("cleaned_markdown"), str)
+                else None
+            )
+            original_score = (
+                float(comparison["original_score"])
+                if isinstance(comparison.get("original_score"), (int, float))
+                else None
+            )
+            cleaned_score = (
+                float(comparison["cleaned_score"])
+                if isinstance(comparison.get("cleaned_score"), (int, float))
+                else None
+            )
+            original_error = (
+                str(comparison["original_error"])
+                if isinstance(comparison.get("original_error"), str)
+                else None
+            )
+            cleaned_error = (
+                str(comparison["cleaned_error"])
+                if isinstance(comparison.get("cleaned_error"), str)
+                else None
+            )
+            diff_similarity = (
+                float(comparison["diff_similarity"])
+                if isinstance(comparison.get("diff_similarity"), (int, float))
+                else None
+            )
+            suspicious_reasons = [
+                str(reason)
+                for reason in comparison.get("suspicious_reasons", [])
+                if isinstance(reason, str) and reason.strip()
+            ]
             ocr_seconds = perf_counter() - page_start
             if not is_tr_document_category(document_category):
                 raw_markdown, header_crop_reason = _prepend_first_page_case_header_if_needed(
@@ -3404,6 +3771,7 @@ def mark_import_checked(
                 "updated_at": now,
                 "checked_at": now,
                 "checked_by": normalized_checked_by,
+                "save_btn": "Y",
                 "note": normalized_note,
             }
         },
@@ -3660,7 +4028,7 @@ def _process_source_file(
         collection.update_one({"_id": existing["_id"]}, {"$set": update_fields})
         existing = collection.find_one({"_id": existing["_id"]}) or existing
         _log_import_event(
-            f"{display_filename} matched existing fingerprint in MongoDB"
+            f"{display_filename} matched existing fingerprint in SQL Server storage"
         )
         _cleanup_incoming_source_file(file_path, settings)
         return _build_import_record(existing)
@@ -3699,6 +4067,7 @@ def _process_source_file(
         "updated_at": now,
         "checked_at": None,
         "checked_by": None,
+        "save_btn": "N",
         "note": None,
         **_empty_ocr_payload(),
     }
@@ -3706,7 +4075,7 @@ def _process_source_file(
         collection.insert_one(document)
     except DuplicateKeyError:
         _log_import_event(
-            f"{display_filename} hit a duplicate fingerprint while saving; reusing the existing MongoDB record"
+            f"{display_filename} hit a duplicate fingerprint while saving; reusing the existing SQL Server record"
         )
         existing_after_insert = collection.find_one({"source_fingerprint": fingerprint})
         if existing_after_insert is None:

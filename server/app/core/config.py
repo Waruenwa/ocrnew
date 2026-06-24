@@ -19,12 +19,12 @@ JOBS_ORIGINAL_DIR = JOBS_STORAGE_DIR / "original"
 JOBS_DERIVED_DIR = JOBS_STORAGE_DIR / "derived"
 DEFAULT_CORS_ORIGINS = ("http://localhost:3000",)
 DEFAULT_OCR_MODEL = "scb10x/typhoon-ocr1.5-3b:latest"
-DEFAULT_OCR_TARGET_IMAGE_DIM = 1100
+DEFAULT_OCR_TARGET_IMAGE_DIM = 900
 DEFAULT_OCR_TIMEOUT_SECONDS = 120
-DEFAULT_OCR_NUM_PREDICT = 2200
-DEFAULT_VISION_BASE_URL = ""
+DEFAULT_OCR_NUM_PREDICT = 400
+DEFAULT_VISION_BASE_URL = "http://localhost:11434/api/generate"
 DEFAULT_VISION_MODEL = ""
-DEFAULT_VISION_TIMEOUT_SECONDS = 45
+DEFAULT_VISION_TIMEOUT_SECONDS = 120
 DEFAULT_VISION_NUM_PREDICT = 600
 DEFAULT_ANCHOR_PROVIDER = "auto"
 DEFAULT_ANCHOR_LANGUAGE = "th"
@@ -50,6 +50,13 @@ def _parse_csv(raw_value: str | None) -> tuple[str, ...]:
         return ()
     values = tuple(value.strip() for value in raw_value.split(",") if value.strip())
     return values
+
+
+def _env_flag(name: str, default: bool = True) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off", "disabled"}
 
 
 def _looks_local_url(raw_url: str | None) -> bool:
@@ -90,10 +97,14 @@ def _resolve_dir(raw_value: str | None, default_path: Path) -> Path:
 class Settings:
     app_name: str
     cors_origins: tuple[str, ...]
-    mongodb_uri: str
-    mongodb_database: str
-    mongodb_jobs_collection: str
-    mongodb_imports_collection: str
+    mssql_connection_string: str | None
+    mssql_server: str | None
+    mssql_database: str | None
+    mssql_username: str | None
+    mssql_password: str | None
+    mssql_driver: str
+    mssql_trust_server_certificate: str
+    mssql_ocrdata_table: str
     imports_source_dir: Path
     imports_original_dir: Path
     imports_derived_dir: Path
@@ -113,6 +124,7 @@ class Settings:
     vision_base_url: str
     vision_api_key: str | None
     vision_model: str
+    vision_enabled: bool
     vision_timeout_seconds: int
     vision_num_predict: int
     anchor_provider: str
@@ -129,8 +141,9 @@ class Settings:
 
     @property
     def vision_ready(self) -> bool:
-        # Vision/Qwen is intentionally disabled in the current OCR-only baseline.
-        return False
+        if not self.vision_enabled:
+            return False
+        return _endpoint_ready(self.vision_base_url, self.vision_model, self.vision_api_key)
 
     @property
     def text_client_api_key(self) -> str:
@@ -142,13 +155,21 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    mssql_connection_string = os.getenv("MSSQL_CONNECTION_STRING")
+    mssql_server = os.getenv("MSSQL_SERVER")
+    mssql_database = os.getenv("MSSQL_DATABASE")
+
     return Settings(
         app_name=os.getenv("APP_NAME", "OCR Server"),
         cors_origins=_parse_origins(os.getenv("APP_CORS_ORIGINS")),
-        mongodb_uri=os.getenv("MONGODB_URI", "mongodb://127.0.0.1:27017"),
-        mongodb_database=os.getenv("MONGODB_DATABASE", "ocrstudio"),
-        mongodb_jobs_collection=os.getenv("MONGODB_JOBS_COLLECTION", "ocr_jobs"),
-        mongodb_imports_collection=os.getenv("MONGODB_IMPORTS_COLLECTION", "ocr_imports"),
+        mssql_connection_string=mssql_connection_string,
+        mssql_server=mssql_server,
+        mssql_database=mssql_database,
+        mssql_username=os.getenv("MSSQL_USERNAME"),
+        mssql_password=os.getenv("MSSQL_PASSWORD"),
+        mssql_driver=os.getenv("MSSQL_DRIVER", "ODBC Driver 17 for SQL Server"),
+        mssql_trust_server_certificate=os.getenv("MSSQL_TRUST_SERVER_CERTIFICATE", "yes"),
+        mssql_ocrdata_table=os.getenv("MSSQL_OCRDATA_TABLE", "dbo.ocrdata"),
         imports_source_dir=_resolve_dir(os.getenv("IMPORTS_SOURCE_DIR"), IMPORTS_SOURCE_DIR),
         imports_original_dir=_resolve_dir(
             os.getenv("IMPORTS_ORIGINAL_DIR"),
@@ -182,6 +203,7 @@ def load_settings() -> Settings:
         or DEFAULT_VISION_BASE_URL,
         vision_api_key=_get_first_env("VISION_API_KEY", "VLM_API_KEY"),
         vision_model=_get_first_env("VISION_MODEL", "VLM_MODEL") or DEFAULT_VISION_MODEL,
+        vision_enabled=_env_flag("VISION_ENABLED", False),
         vision_timeout_seconds=int(
             os.getenv("VISION_TIMEOUT_SECONDS", str(DEFAULT_VISION_TIMEOUT_SECONDS))
         ),

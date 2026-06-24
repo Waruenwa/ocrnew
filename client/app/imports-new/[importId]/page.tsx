@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Box,
@@ -14,6 +14,7 @@ import {
   Text,
 } from '@chakra-ui/react';
 
+import { getAuthHeaders } from '../../lib/auth';
 import {
   API_BASE_URL,
   type ImportPageAsset,
@@ -213,9 +214,11 @@ const panelStyles = {
 
 export default function ImportNewInspectPage() {
   const params = useParams<{ importId: string }>();
+  const searchParams = useSearchParams();
   const importId = Array.isArray(params?.importId)
     ? params.importId[0]
     : params?.importId;
+  const isStaffSource = searchParams.get('source') === 'staff';
 
   const [record, setRecord] = useState<ImportRecord | null>(null);
   const [activePageNumber, setActivePageNumber] = useState(1);
@@ -241,6 +244,10 @@ export default function ImportNewInspectPage() {
   const [editingHitValue, setEditingHitValue] = useState('');
   const [hitOverrides, setHitOverrides] = useState<Record<string, string>>({});
   const [loadedPreviewUrl, setLoadedPreviewUrl] = useState('');
+  const [isCompletingStaffRecord, setIsCompletingStaffRecord] = useState(false);
+  const [staffActionMessage, setStaffActionMessage] = useState<string | null>(
+    null,
+  );
   const [detectedHeaderAnchors, setDetectedHeaderAnchors] = useState<
     Partial<Record<ParsedFieldKey, HighlightTarget>>
   >({});
@@ -337,7 +344,9 @@ export default function ImportNewInspectPage() {
     record?.pages.find((page) => page.page_number === activePageNumber) ?? null;
   const previewUrl =
     record && selectedPage
-      ? `${API_BASE_URL}/api/imports/${record.id}/pages/${selectedPage.page_number}/cleaned`
+      ? isStaffSource
+        ? `${API_BASE_URL}/api/staff/records/${record.id}/preview`
+        : `${API_BASE_URL}/api/imports/${record.id}/pages/${selectedPage.page_number}/cleaned`
       : '';
 
   const parsed = useMemo(() => parseImportByKeyword(record, KEYWORD), [record]);
@@ -398,7 +407,9 @@ export default function ImportNewInspectPage() {
     }
 
     let cancelled = false;
-    const firstPagePreviewUrl = `${API_BASE_URL}/api/imports/${record.id}/pages/${firstPage.page_number}/cleaned`;
+    const firstPagePreviewUrl = isStaffSource
+      ? `${API_BASE_URL}/api/staff/records/${record.id}/preview`
+      : `${API_BASE_URL}/api/imports/${record.id}/pages/${firstPage.page_number}/cleaned`;
     setDetectedHeaderAnchors({});
 
     detectFirstPageHeaderAnchors(firstPagePreviewUrl, firstPage.page_number)
@@ -416,7 +427,7 @@ export default function ImportNewInspectPage() {
     return () => {
       cancelled = true;
     };
-  }, [record]);
+  }, [isStaffSource, record]);
 
   useEffect(() => {
     if (!activeHighlight || activeHighlight.pageNumber !== activePageNumber) {
@@ -437,9 +448,12 @@ export default function ImportNewInspectPage() {
     setErrorMessage(null);
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/imports/${currentImportId}`,
+        isStaffSource
+          ? `${API_BASE_URL}/api/staff/records/${currentImportId}/import`
+          : `${API_BASE_URL}/api/imports/${currentImportId}`,
         {
           cache: 'no-store',
+          headers: isStaffSource ? getAuthHeaders() : undefined,
         },
       );
       if (!response.ok) {
@@ -461,6 +475,7 @@ export default function ImportNewInspectPage() {
       setEditingFieldValue('');
       setEditingHitId(null);
       setEditingHitValue('');
+      setStaffActionMessage(null);
     } catch (error) {
       setErrorMessage(
         error instanceof Error
@@ -555,6 +570,59 @@ export default function ImportNewInspectPage() {
       return top >= 0.14 && top <= 0.46 && bottom <= 0.54;
     }
     return true;
+  }
+
+  async function completeStaffRecord() {
+    if (!record || !isStaffSource) {
+      return;
+    }
+
+    setIsCompletingStaffRecord(true);
+    setErrorMessage(null);
+    setStaffActionMessage(null);
+    try {
+      const fields = Object.fromEntries(
+        RESULT_FIELDS.map((field) => [field.key, getFieldValue(field.key)]),
+      );
+      const response = await fetch(
+        `${API_BASE_URL}/api/staff/records/${record.id}/complete`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...getAuthHeaders(),
+          },
+          body: JSON.stringify({
+            corrected_result: {
+              fields,
+              keyword_hits:
+                parsed?.keywordHits.map((hit) => ({
+                  id: hit.id,
+                  pageNumber: hit.pageNumber,
+                  text: getHitText(hit),
+                  bbox: hit.bbox,
+                })) ?? [],
+            },
+          }),
+        },
+      );
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(payload?.detail || 'Unable to complete this record.');
+      }
+      setStaffActionMessage('ตรวจเช็คเรียบร้อยแล้ว');
+      await loadImport(record.id);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : 'Unable to complete this record.',
+      );
+    } finally {
+      setIsCompletingStaffRecord(false);
+    }
   }
 
   function getDerivedHeaderAnchor(key: ParsedFieldKey): HighlightTarget | null {
@@ -811,7 +879,10 @@ export default function ImportNewInspectPage() {
           ref={resultPanelRef}
         >
           <Flex align="start" justify="space-between">
-            <Link href="/" style={{ textDecoration: 'none' }}>
+            <Link
+              href={isStaffSource ? '/staff' : '/'}
+              style={{ textDecoration: 'none' }}
+            >
               <Box
                 alignItems="center"
                 bg="rgba(15, 118, 110, 0.06)"
@@ -941,8 +1012,66 @@ export default function ImportNewInspectPage() {
             </Box>
           ) : null}
 
+          {staffActionMessage ? (
+            <Box
+              borderWidth="1px"
+              borderColor="rgba(22, 101, 52, 0.22)"
+              borderRadius="18px"
+              bg="rgba(240, 253, 244, 0.95)"
+              p={4}
+            >
+              <Text color="#166534" fontWeight="700">
+                {staffActionMessage}
+              </Text>
+            </Box>
+          ) : null}
+
           {record && parsed ? (
             <>
+              {isStaffSource ? (
+                <Flex justify="flex-end">
+                  <Box
+                    as="button"
+                    aria-disabled={
+                      isCompletingStaffRecord || record.status === 'checked'
+                    }
+                    onClick={() => {
+                      if (
+                        isCompletingStaffRecord ||
+                        record.status === 'checked'
+                      ) {
+                        return;
+                      }
+                      void completeStaffRecord();
+                    }}
+                    borderRadius="14px"
+                    borderWidth="1px"
+                    borderColor="rgba(15, 118, 110, 0.22)"
+                    bg={
+                      record.status === 'checked'
+                        ? 'rgba(229, 231, 235, 0.9)'
+                        : 'linear-gradient(135deg, #0f766e, #115e59)'
+                    }
+                    color={record.status === 'checked' ? '#64748b' : 'white'}
+                    cursor={
+                      isCompletingStaffRecord || record.status === 'checked'
+                        ? 'not-allowed'
+                        : 'pointer'
+                    }
+                    fontWeight="800"
+                    minH="44px"
+                    px={5}
+                    opacity={isCompletingStaffRecord ? 0.7 : 1}
+                  >
+                    {record.status === 'checked'
+                      ? 'ตรวจเช็คแล้ว'
+                      : isCompletingStaffRecord
+                        ? 'กำลังบันทึก...'
+                        : 'ตรวจเช็ค'}
+                  </Box>
+                </Flex>
+              ) : null}
+
               <Grid
                 gap={3}
                 templateColumns={{
